@@ -1,8 +1,11 @@
 node_modules/
+build/
+.react-router/
+
+# El secreto del agente y la URL de su caja viven aquí; nunca al repo.
 .env
 .env.*
 !.env.example
-build/
-.react-router/
+
 .DS_Store
 *.log
