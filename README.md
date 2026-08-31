@@ -17,8 +17,8 @@ laptop, y es la razón de todo lo demás.
 
 ## El taller
 
-Este repo es el material de un taller de seis sesiones, un documento por sesión en
-[`docs/`](docs/). Las dos primeras están hechas y verificadas; las otras cuatro son planes: lo que
+Este repo es el material de **[Sistemas Agénticos](https://www.fixtergeek.com/sistemas-agenticos)**,
+un taller de seis sesiones. Un documento por sesión en [`docs/`](docs/). Las dos primeras están hechas y verificadas; las otras cuatro son planes: lo que
 ya se sabe y lo que falta decidir.
 
 | | Sesión | Documento | Estado |
