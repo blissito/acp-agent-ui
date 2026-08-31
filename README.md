@@ -1,8 +1,8 @@
-# Un agente de código con interfaz propia
+# Un agente en su propia máquina
 
-Una interfaz web para un agente de código que **no corre en tu máquina**: vive dentro de una
-microVM, opera su propio disco, y se le habla por el
-[Agent Client Protocol](https://agentclientprotocol.com) sobre WebSocket.
+Una interfaz web para un agente que **no corre en la tuya**: vive dentro de una microVM, opera su
+propio disco, y se le habla por el [Agent Client Protocol](https://agentclientprotocol.com) sobre
+WebSocket.
 
 ```text
 [ Navegador ]

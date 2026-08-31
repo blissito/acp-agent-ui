@@ -12,7 +12,7 @@
 
 ## 1. Objetivo
 
-**Ese día 1** se demuestra y especifica cómo se consume un agente de código por el **Agent Client Protocol (ACP)**
+**Ese día 1** se demuestra y especifica cómo se consume un agente por el **Agent Client Protocol (ACP)**
 desde un cliente remoto, con el agente corriendo **dentro de una microVM de EasyBits** y el cliente
 llegando a ella **por SSH (túnel sobre 443)**. El terreno de la demo = **todo EasyBits** (la caja, el
 LLM vía catálogo de EasyBits y el runtime del agente). El objetivo de producto es **un backend +
