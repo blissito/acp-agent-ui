@@ -1,0 +1,14 @@
+{
+  "name": "acp-web",
+  "private": true,
+  "version": "2.0.0",
+  "type": "module",
+  "description": "SPEC-2: backend que consume goose por WSS/ACP con el SDK oficial y streamea por SSE.",
+  "scripts": {
+    "start": "node server.mjs"
+  },
+  "dependencies": {
+    "@agentclientprotocol/sdk": "1.4.0",
+    "ws": "^8.18.0"
+  }
+}

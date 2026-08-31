@@ -1,0 +1,5 @@
+Partes de esta interfaz derivan de goose (github.com/block/goose), Apache License 2.0,
+Copyright Block, Inc. En concreto: el sistema de tokens de tema (app/theme/theme-tokens.ts),
+la hoja de estilos base (app/app.css) y las primitivas de UI en app/components/ui/.
+
+Ver http://www.apache.org/licenses/LICENSE-2.0

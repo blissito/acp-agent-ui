@@ -1,0 +1,116 @@
+@import "tailwindcss";
+/* Streamdown v2 renderiza utilidades Tailwind/shadcn; hay que dejarlas detectables. */
+@source "../node_modules/streamdown/dist/*.js";
+
+/* ---- design tokens (shadcn) — Streamdown los requiere. App oscura. ---- */
+:root {
+  color-scheme: dark;
+  --background: oklch(0.145 0 0);
+  --foreground: oklch(0.985 0 0);
+  --card: oklch(0.205 0 0);
+  --card-foreground: oklch(0.985 0 0);
+  --muted: oklch(0.269 0 0);
+  --muted-foreground: oklch(0.708 0 0);
+  --border: oklch(0.269 0 0);
+  --input: oklch(0.269 0 0);
+  --primary: oklch(0.985 0 0);
+  --primary-foreground: oklch(0.205 0 0);
+  --sidebar: oklch(0.205 0 0);
+  --sidebar-foreground: oklch(0.985 0 0);
+  --ring: oklch(0.708 0 0);
+  --radius: 0.625rem;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-ring: var(--ring);
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+}
+
+/* ---- app (CSS propio de la SPA, ajeno a Streamdown) ---- */
+* { box-sizing: border-box; }
+body { font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; background: #0f1115; color: #e6e6e6; margin: 0; }
+.page { max-width: 720px; margin: 0 auto; padding: 20px; min-height: 100vh; }
+.chat { max-width: 780px; margin: 0 auto; padding: 0 20px; height: 100vh; height: 100dvh; display: flex; flex-direction: column; }
+.page h1 { font-size: 22px; font-weight: 600; }
+.sub { color: #8a8f9c; }
+.err { color: #ff6b6b; }
+
+.page button {
+  background: #2b6de8; color: #fff; border: 0; border-radius: 12px;
+  padding: 10px 18px; font-size: 15px; font-weight: 600; cursor: pointer;
+}
+.page button:hover:not(:disabled) { background: #1f5fd0; }
+.page button:disabled { opacity: .5; cursor: default; }
+
+/* ---- header ---- */
+.chat-head { display: flex; align-items: center; gap: 12px; padding: 14px 0; border-bottom: 1px solid #1d2027; }
+.chat-head .brand { color: #8a8f9c; display: flex; align-items: center; text-decoration: none; padding: 6px; border-radius: 8px; }
+.chat-head .brand:hover { background: #1c1f27; color: #e6e6e6; }
+.agent { display: flex; align-items: center; gap: 10px; }
+.avatar { width: 32px; height: 32px; border-radius: 50%; background: linear-gradient(135deg, #2b6de8, #7c3aed); color: #fff; display: inline-flex; align-items: center; justify-content: center; font-weight: 700; font-size: 15px; flex-shrink: 0; }
+.avatar.big { width: 48px; height: 48px; font-size: 22px; }
+.agent-meta { display: flex; flex-direction: column; line-height: 1.25; }
+.agent-meta strong { font-size: 14px; }
+.status-line { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: #8a8f9c; }
+.status-line .dot { width: 7px; height: 7px; border-radius: 50%; background: #8a8f9c; }
+.status-line.st-conectado .dot { background: #34d399; }
+.status-line.st-pensando .dot { background: #f59e0b; animation: pulse 1s infinite; }
+.status-line.st-error .dot { background: #f87171; }
+.status-line.st-list .dot, .status-line.st-listo .dot { background: #34d399; }
+@keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: .3; } }
+
+/* ---- mensajes ---- */
+.msgs { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 14px; padding: 20px 0; }
+.msg { max-width: 82%; padding: 10px 14px; border-radius: 16px; white-space: pre-wrap; word-break: break-word; min-width: 0; overflow-wrap: anywhere; }
+.msg.user { align-self: flex-end; background: #2b6de8; color: #fff; border-bottom-right-radius: 6px; }
+.msg.bot { align-self: flex-start; background: #1c1f27; border: 1px solid #262a34; border-bottom-left-radius: 6px; white-space: normal; }
+
+/* markdown: Streamdown se estiliza solo vía Tailwind + tokens; esto solo evita
+   que un token larguísimo (URL, hash) desborde el globo. */
+.md { overflow-wrap: anywhere; min-width: 0; }
+.md img { max-width: 100%; border-radius: 8px; }
+
+.tool-chip { font-size: 12px; color: #c9a227; background: #2a2410; border: 1px solid #3d3418; border-radius: 999px; padding: 3px 10px; }
+.msg .u { font-size: 11px; color: #8a8f9c; margin-top: 6px; }
+
+/* ---- indicador "pensando…" ---- */
+.typing { display: inline-flex; gap: 4px; padding: 4px 2px; }
+.typing span { width: 7px; height: 7px; border-radius: 50%; background: #8a8f9c; animation: bounce 1.2s infinite; }
+.typing span:nth-child(2) { animation-delay: .15s; }
+.typing span:nth-child(3) { animation-delay: .3s; }
+@keyframes bounce { 0%, 60%, 100% { transform: translateY(0); opacity: .5; } 30% { transform: translateY(-5px); opacity: 1; } }
+
+/* ---- estado vacío ---- */
+.empty { display: flex; flex-direction: column; align-items: center; gap: 12px; margin: auto; color: #8a8f9c; text-align: center; }
+.empty p { margin: 0; }
+
+/* ---- pie: input + botón enviar (icono) ---- */
+.chat-foot { display: flex; gap: 8px; padding: 12px 0 18px; align-items: flex-end; }
+.chat-foot input {
+  flex: 1; background: #1c1f27; color: #e6e6e6; border: 1px solid #2a2e39;
+  border-radius: 14px; padding: 12px 16px; font-size: 15px; outline: none; resize: none;
+}
+.chat-foot input:focus { border-color: #2b6de8; }
+.chat-foot input:disabled { opacity: .5; }
+.chat-foot .send {
+  width: 44px; height: 44px; border-radius: 50%; border: 0; cursor: pointer;
+  background: #2b6de8; color: #fff; display: inline-flex; align-items: center; justify-content: center;
+  flex-shrink: 0; transition: background .15s;
+}
+.chat-foot .send:hover:not(:disabled) { background: #1f5fd0; }
+.chat-foot .send:disabled { opacity: .4; cursor: default; }
