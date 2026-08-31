@@ -1,7 +1,7 @@
 # Spec 1 — Día 1 · Agente ACP en caja EasyBits consumido por SSH
 
-> Sesión 1 del taller: el agente dentro de la caja. Las sesiones siguientes son
-> [SPEC-2](SPEC-2.md) (la web que lo consume) y [SPEC-3](SPEC-3.md) (la interfaz actual).
+> Sesión 1 del taller: el agente viviendo fuera de tu compu. Sigue
+> [la sesión 2](spec2-ui-solida.md), que le pone interfaz.
 
 > Taller: **Día 1**. Estado: **probado** de punta a punta (incluido **multi-turno** y **REPL interactivo**).
 > Este spec es la **base**; de él nace **SPEC-2 (Día 2: interfaz web)** que lo consume por SSH/ACP.

@@ -17,19 +17,21 @@ laptop, y es la razón de todo lo demás.
 
 ## El taller
 
-Este repo es el material de un taller de tres sesiones. Cada una tiene su documento en
-[`docs/`](docs/), y cada uno es reproducible por su cuenta.
+Este repo es el material de un taller de seis sesiones, un documento por sesión en
+[`docs/`](docs/). Las dos primeras están hechas y verificadas; las otras cuatro son planes: lo que
+ya se sabe y lo que falta decidir.
 
-| Sesión | Documento | De qué va |
-|---|---|---|
-| 1 | [`docs/SPEC-1.md`](docs/SPEC-1.md) | El agente dentro de la caja, hablado por ACP a través de SSH. |
-| 2 | [`docs/SPEC-2.md`](docs/SPEC-2.md) | Una web que lo consume: server único, SSE, y link público. |
-| 3 | [`docs/SPEC-3.md`](docs/SPEC-3.md) | **Esta app**: interfaz propia con render en el servidor. |
+| | Sesión | Documento | Estado |
+|---|---|---|---|
+| 1 | Vive fuera de tu compu y despierta cuando lo llamas | [`spec1-agente-fuera.md`](docs/spec1-agente-fuera.md) | ✅ |
+| 2 | UI propia, mostrando lo que hace mientras lo hace | [`spec2-ui-solida.md`](docs/spec2-ui-solida.md) | ✅ |
+| 3 | Lo matas a media tarea y revive donde iba | [`spec3-revivir.md`](docs/spec3-revivir.md) | plan |
+| 4 | Contesta por WhatsApp y te pide permiso desde ahí | [`spec4-whatsapp-permisos.md`](docs/spec4-whatsapp-permisos.md) | plan |
+| 5 | Sólido, corriendo, y con forma de saber si se rompe | [`spec5-operacion.md`](docs/spec5-operacion.md) | plan |
+| 6 | Haciendo lo tuyo, no el ejercicio del taller | [`spec6-lo-tuyo.md`](docs/spec6-lo-tuyo.md) | plan |
 
-La app de la sesión 3 es la que vive en la raíz. La SPA de la sesión 2 se conserva en
-[`legacy/web/`](legacy/web/), porque su documento la describe paso a paso.
-
-Lo que sigue —extensiones MCP, skills, memoria— está en [`ROADMAP.md`](ROADMAP.md).
+La app de la sesión 2 es la que vive en la raíz. Un primer intento de esa interfaz, en SPA, quedó
+en [`legacy/`](legacy/) con su documento.
 
 ## Correrlo
 

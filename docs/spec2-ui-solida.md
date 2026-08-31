@@ -1,16 +1,16 @@
-# SPEC-3 — Interfaz propia con SSR (React Router v8)
+# Spec 2 — UI propia, mostrando lo que hace mientras lo hace
 
-> Sesión 3 del taller. **La app de este documento es la que vive en la raíz del repo.** La SPA de
-> la sesión 2 se conserva en [`legacy/web/`](../legacy/web/) como referencia verificada.
+> Sesión 2 del taller. **La app de este documento es la que vive en la raíz del repo.** Un primer
+> intento en SPA quedó en [`legacy/`](../legacy/) con su propio documento.
 >
 > **Estado: ✅ verificado de punta a punta.** Un turno desde el navegador llega al agente, que
 > escribe en el disco de su caja y responde con markdown, tokens y costo.
 
 ---
 
-## 1. Qué cambia respecto al SPEC-2
+## 1. Qué cambia respecto al primer intento
 
-| | Sesión 2 (`legacy/web/`) | Sesión 3 (la raíz) |
+| | Primer intento (`legacy/web/`) | Esta app (la raíz) |
 |---|---|---|
 | Render | SPA de Vite servida por `node:http` | SSR con React Router en Express |
 | Rutas | `/` y `/c/:id` | 9 rutas, layout compartido |
