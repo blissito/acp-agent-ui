@@ -4,6 +4,10 @@
 > [la sesión 2](spec2-ui-solida.md), que le pone interfaz.
 
 > Taller: **Día 1**. Estado: **probado** de punta a punta (incluido **multi-turno** y **REPL interactivo**).
+> **Los scripts de esta sesión ya no están en el repo.** Eran probes de línea de comandos que
+> quedaron obsoletos cuando la interfaz los sustituyó; viven en el primer commit
+> (`git show d4159f3 --stat`) si quieres recuperarlos.
+>
 > Este spec es la **base**; de él nace la [sesión 2](spec2-ui-solida.md), la interfaz que lo consume.
 > Última actualización: 2026-08-28 · Objetivo: verificar el patrón de consumo de un agente (goose)
 > **oficial**, en una **caja limpia de EasyBits**, vía **ACP sobre SSH (túnel 443)**.
@@ -156,7 +160,7 @@ Probar LLM: `goose run -t "Responde exactamente: GOOSE_EASYBITS_OK"` → `GOOSE_
 
 ### 4.5 Cliente ACP (cómo hablarle al agente)
 
-Tres scripts en `acp-ghosty-poc/` que Spawnean `ssh -i $SSH_KEY <SANDBOX_ID>.ghosty "goose-acp"`:
+Tres scripts que spawnean `ssh -i $SSH_KEY <SANDBOX_ID>.ghosty "goose-acp"`:
 
 | Script | Qué hace |
 |---|---|
@@ -172,7 +176,6 @@ aceptan: `ACP_BOX` (host `*.ghosty`), `ACP_KEY` (llave privada), `ACP_CWD` (cwd 
 **Interactuar** (desde tu terminal):
 
 ```bash
-cd acp-ghosty-poc
 node ssh_repl.mjs                 # chat interactivo multi-turno
 node ssh_client.mjs "un mensaje"  # one-shot
 ```
@@ -336,7 +339,7 @@ de ejecución de comandos; solo lectura/escritura y búsqueda”*.
 > `allow_shell = true` en `/root/.ghosty/config.toml` de la caja `sb_d6a36806-…`, un
 > `session/prompt` que pide ejecutar un comando hace que ghosty pida permiso `bash`
 > (`session/request_permission`) y devuelve la salida real: `echo GHOSTY_BASH_OK` → `GHOSTY_BASH_OK`.
-> Verificación reproducible: `node acp-ghosty-poc/bash_e2e_probe.mjs` (props `ACP_CMD`/`ACP_BOX`).
+> Verificación reproducible: `node bash_e2e_probe.mjs` (props `ACP_CMD`/`ACP_BOX`).
 
 ---
 
@@ -359,14 +362,14 @@ probado; el diseño de producto va allá.
 | Caja `sb_d6a36806-…` (`goose-demo`) | **activa** · agente goos/ghosty con `allow_shell` |
 | Caja `sb_85e7ea1b-…` (`webapp`) | **activa** · link público; `server.mjs` con `terminal: true` |
 | Caja `sb_420d62b2-…` (`ghosty-acp-poc`) | sobrante; expira sola 03:35 |
-| `acp-ghosty-poc/ssh_client.mjs` | cliente ACP one-shot |
-| `acp-ghosty-poc/ssh_repl.mjs` | REPL interactivo multi-turno |
-| `acp-ghosty-poc/multi_turn.mjs` | probe multi-turno |
-| `acp-ghosty-poc/bash_e2e_probe.mjs` | probe: ghosty ejecuta shell por SSH (ver §6.5) |
-| `acp-ghosty-poc/app_e2e.mjs` | probe: bash a través del app desplegado (trayecto completo) |
-| `acp-ghosty-poc/tools_probe.mjs` | probe del catálogo de tools (no aplica a ghosty; usa goose) |
+| `ssh_client.mjs` | cliente ACP one-shot |
+| `ssh_repl.mjs` | REPL interactivo multi-turno |
+| `multi_turn.mjs` | probe multi-turno |
+| `bash_e2e_probe.mjs` | probe: ghosty ejecuta shell por SSH (ver §6.5) |
+| `app_e2e.mjs` | probe: bash a través del app desplegado (trayecto completo) |
+| `tools_probe.mjs` | probe del catálogo de tools (no aplica a ghosty; usa goose) |
 | `docs/spec1-agente-fuera.md` | este spec (día 1) |
-| `acp-ghosty-poc/la sesión 2.md` | spec día 2 (interfaz web, nace de este) |
+| `la sesión 2.md` | spec día 2 (interfaz web, nace de este) |
 | `~/.ghosty/sb_ed25519` (privada) | llave SSH cajas (no commitear) |
 | `~/.ghosty/.ebkey`, `~/.ghosty/.dstmp` | secrets locales (no commitear) |
 
