@@ -2,9 +2,9 @@ import type { LucideIcon } from "lucide-react";
 import { MainPanelLayout } from "~/components/Layout/MainPanelLayout";
 
 /**
- * Vista de sección todavía sin datos. El Desktop las llena con endpoints HTTP
- * de goosed que este POC no consume; queda el encabezado y el estado vacío
- * dice exactamente qué falta en vez de fingir contenido.
+ * Vista de sección todavía sin datos. Todas se llenan por ACP, con métodos de
+ * extensión `goose.*_unstable` sobre la conexión que ya existe. El estado vacío
+ * nombra el método que falta llamar, en vez de fingir contenido.
  */
 export function PlaceholderView({
   title,

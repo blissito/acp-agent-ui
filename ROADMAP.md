@@ -10,6 +10,7 @@ que dice qué falta.
 ## Extensiones (MCP)
 
 **Vista:** `/extensions` · **Hoy:** el `initialize` manda `mcpServers: []`.
+**Por dónde:** ACP, `goose.configExtensionsList_unstable` y compañía.
 
 Un agente sin herramientas sólo puede leer y escribir su disco. Conectarle servidores MCP es lo que
 lo saca de la caja: una base de datos, una API, un navegador.
@@ -18,8 +19,9 @@ Lo que hay que resolver:
 
 - El `session/new` de ACP acepta `mcpServers` — es el lugar donde entran, y hoy va vacío desde
   `app/.server/acp.ts`.
-- ¿Dónde vive la configuración? El Desktop la guarda en el perfil de `goosed`; aquí lo natural es
-  el disco de la caja (`/root/.config/goose/`), que es lo que sobrevive a la suspensión.
+- La configuración se lee y escribe por ACP: `goose.configExtensionsList_unstable`, más `Add`,
+  `Remove` y `SetEnabled`. Vive en el disco de la caja (`/root/.config/goose/`), que es lo que
+  sobrevive a la suspensión.
 - Alta y baja desde la interfaz implica escribir en la caja y reiniciar la sesión ACP, no sólo la
   conversación.
 - **El permiso deja de ser trámite.** Hoy `session/request_permission` se auto-aprueba. Con
@@ -29,13 +31,15 @@ Lo que hay que resolver:
 ## Skills
 
 **Vista:** `/skills` · **Hoy:** nada las lee.
+**Por dónde:** ACP, `goose.sourcesList_unstable`.
 
 Instrucciones que el agente carga cuando hacen falta, en vez de cargar todo siempre. Es la
 diferencia entre un prompt gigante y un agente que sabe buscar lo que necesita.
 
 Lo que hay que resolver:
 
-- Viven en el disco de la caja. Listarlas es leer un directorio del agente, no una tabla local.
+- Viven en el disco de la caja, y quien las lee es el agente: `goose.sourcesList_unstable` las
+  devuelve por la misma conexión.
 - Editarlas desde la web significa escribir en la caja: `POST /sandboxes/:id/exec` o la API de
   archivos del sandbox.
 - Qué pasa cuando una skill cambia a mitad de una sesión ACP viva.
@@ -64,8 +68,9 @@ Lo que hay que resolver:
 ## Pendientes sueltos de la sesión 3
 
 - **`session/cancel`.** El botón de parar está dibujado y no interrumpe.
-- **Las vistas en cascarón** `/recipes`, `/apps` y `/schedules`. El planificador no tiene
-  equivalente en ACP: habría que correrlo en la caja y exponerlo aparte.
+- **Las vistas en cascarón** `/recipes`, `/apps` y `/schedules`. Las tres salen por ACP
+  (`recipesList_unstable`, `appsList_unstable`, `schedulesList_unstable`); la agenda además exige
+  arrancar el agente con `--enable-scheduler`, y las Apps piden `@mcp-ui/client` del lado web.
 - **Propuesta para EasyBits**, no para este repo: que `expose` mire qué está escuchando y, si sólo
   ve `127.0.0.1:<puerto>`, devuelva la URL con una advertencia en vez de dejar caer un 502 mudo.
   El problema no es la regla, es el diagnóstico.

@@ -31,8 +31,7 @@ casi sin tocarla. Se copió tal cual:
 - `styles/main.css` → `app/app.css` — la hoja base y el registro de tokens en Tailwind.
 - `components/ui/` — las primitivas (button, card, dialog, tabs, input, …).
 
-Se rehízo lo que dependía de Electron o de `goosed`: layout, panel de navegación, Hub, input y el
-hilo del chat.
+Se rehízo lo que dependía de Electron: layout, panel de navegación, Hub, input y el hilo del chat.
 
 ### 2.1 El tema tiene que viajar en cookie
 
@@ -75,9 +74,22 @@ El navegador nunca habla ACP. El `EventSource` recibe eventos ya traducidos
 | `/settings` | Tema (funciona) + la conexión al agente en modo lectura. |
 | `/recipes` `/skills` `/apps` `/schedules` `/extensions` | Encabezado y estado vacío. |
 
-Las cinco últimas están en cascarón a propósito: en el Desktop se llenan con endpoints HTTP de
-`goosed` que este backend no consume, y el planificador ni siquiera tiene equivalente en ACP. Cada
-estado vacío dice qué falta, en vez de fingir contenido.
+Las cinco últimas están en cascarón a propósito, y completarlas es más barato de lo que parece:
+**todas se llenan por ACP**, con métodos de extensión sobre la conexión que ya existe.
+
+| Vista | Métodos (`goose.*_unstable`) |
+|---|---|
+| Extensiones | `configExtensionsList` · `Add` · `Remove` · `SetEnabled` |
+| Agenda | `schedulesList` · `Create` · `Delete` · `Pause` · `RunNow` |
+| Recetas | `recipesList` · `Save` · `Delete` · `Parse` · `Encode` |
+| Habilidades | `sourcesList` |
+| Apps | `appsList` · `Import` · `Export`, más `toolsList` · `toolsCall` |
+
+El sufijo `_unstable` es de goose: pueden cambiar sin aviso. La agenda además exige que el agente
+corra con `--enable-scheduler`, y las Apps necesitan `@mcp-ui/client` del lado web — el agente ya
+monta `/mcp-app-guest` y `/mcp-app-proxy` en el mismo puerto expuesto.
+
+Cada estado vacío nombra su método, para que completar la vista sea el ejercicio.
 
 ## 5. Móvil
 
@@ -86,6 +98,12 @@ palabras. Debajo de 768 px el panel pasa a ser un cajón sobre un velo, arranca 
 al navegar. Verificado en 375×812.
 
 ## 6. El agente: que sobreviva a la suspensión
+
+> El Desktop de goose **no corre un daemon aparte**. Arranca
+> `goose serve --platform desktop --enable-scheduler --host 127.0.0.1 --port <libre>`: el mismo
+> binario y el mismo subcomando que corre la caja. `goosed` es un nombre histórico del que sólo
+> quedan comentarios en el repo. Lo que separa a esta app del Desktop son banderas y métodos, no
+> otro programa.
 
 La caja del agente se suspende al quedar inactiva, y al despertar **nadie relanzaba `goose serve`**.
 El síntoma era un 401 intermitente que parecía de credenciales y era de que no había servidor.

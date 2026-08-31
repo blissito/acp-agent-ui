@@ -7,7 +7,7 @@ export default function Schedules() {
       title="Agenda"
       description="Conversaciones que arrancan solas en un horario."
       icon={Clock}
-      pending="El planificador es del daemon de goose; por ACP no hay equivalente. Habría que correrlo en la caja y exponerlo."
+      pending="Salen por ACP, con goose.schedulesList_unstable y compañía. Requieren que el agente corra con --enable-scheduler, que hoy la unidad de systemd no pasa."
     />
   );
 }

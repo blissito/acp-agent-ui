@@ -7,7 +7,7 @@ export default function Extensions() {
       title="Extensiones"
       description="Los servidores MCP que el agente tiene conectados."
       icon={Puzzle}
-      pending="El initialize de este cliente manda mcpServers vacío. Falta leer la config de la caja y permitir alta y baja."
+      pending="Salen por ACP, con goose.configExtensionsList_unstable (más Add, Remove, SetEnabled). Hoy el initialize manda mcpServers vacío."
     />
   );
 }

@@ -7,7 +7,7 @@ export default function Skills() {
       title="Habilidades"
       description="Instrucciones que el agente carga bajo demanda."
       icon={Zap}
-      pending="Las habilidades viven en el disco de la caja. Falta una ruta que las liste leyendo el sistema de archivos del agente."
+      pending="Salen por ACP, con goose.sourcesList_unstable. Los archivos viven en el disco de la caja; el agente es quien los lee."
     />
   );
 }

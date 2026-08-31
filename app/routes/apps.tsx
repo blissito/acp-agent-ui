@@ -7,7 +7,7 @@ export default function Apps() {
       title="Apps"
       description="Interfaces que las extensiones MCP dibujan dentro del chat."
       icon={AppWindow}
-      pending="Requiere el cliente de MCP-UI y que el servidor declare la capability correspondiente en el initialize."
+      pending="El agente ya monta /mcp-app-guest y /mcp-app-proxy, y expone goose.appsList_unstable. Falta el lado web: @mcp-ui/client para dibujar la app dentro del chat."
     />
   );
 }
