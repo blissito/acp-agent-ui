@@ -143,6 +143,18 @@ Exponer el puerto correcto no basta: la bandera que hace el trabajo es `--host`.
 general de las cajas, no como nota al pie — cualquier servicio que quieras alcanzar desde fuera
 bindea `0.0.0.0`.
 
+Ese 502 mudo ya no es mudo: desde el 31 ago 2026, `expose` mira qué está escuchando y, si sólo ve
+loopback, devuelve la URL con un `warning` que lo dice — por REST v2 y por MCP. Calla cuando el
+bind está bien y cuando todavía no hay nada escuchando, que es un flujo normal.
+
+```json
+{
+  "url": "https://sb-<id>-3284.sandboxes.easybits.cloud",
+  "warning": "el puerto 3284 escucha sólo en 127.0.0.1 dentro de la caja; el proxy público
+              dialea la IP del guest y no puede alcanzarlo. Bindea a 0.0.0.0 (o ::) …"
+}
+```
+
 `sandbox_expose_port` **sí sirve `wss://`**: es capa 7 con TLS y Caddy pasa el `Upgrade` nativo. La
 misma URL acepta HTTPS y WebSocket; lo único rechazado es L4 crudo (22/23/25/445/3389 → 400). Su
 documentación decía "HTTP ONLY" queriendo decir "no capa 4 cruda", y se leía como "sin WebSocket" —

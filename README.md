@@ -75,8 +75,9 @@ atribución está en [`NOTICE`](NOTICE).
 ## Tres cosas que cuestan una tarde si no te las cuentan
 
 - **`goose serve` escucha en `127.0.0.1:3284`.** El proxy del sandbox llega a la IP de la microVM,
-  no a su loopback: sin `--host 0.0.0.0` el resultado es un 502 mudo. Exponer el puerto correcto no
-  alcanza.
+  no a su loopback: sin `--host 0.0.0.0` no lo alcanza. Exponer el puerto correcto no basta. Desde
+  el 31 ago 2026 `expose` lo avisa con un `warning` en la respuesta; antes era un 502 sin
+  explicación.
 - **El tema no puede vivir en `localStorage` con SSR.** Un script que marca la clase antes de
   hidratar desajusta el HTML del servidor y React tira la página — y sólo le pasa a quien ya eligió
   un tema, así que en la primera visita todo se ve bien.
