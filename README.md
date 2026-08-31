@@ -33,6 +33,9 @@ hechas y verificadas, las otras cuatro son planes con lo que ya se sabe y lo que
 La app de la sesión 2 es la que vive en la raíz. Un primer intento de esa interfaz, en SPA, quedó
 en [`legacy/`](legacy/) con su documento.
 
+El estado operativo del día a día —qué corre, qué falta, qué duele— vive en
+[`ESTADO.md`](ESTADO.md).
+
 ## Correrlo
 
 Necesitas una caja con `goose serve` escuchando y su secreto. Si no la tienes,
