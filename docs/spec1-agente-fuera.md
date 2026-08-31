@@ -4,7 +4,7 @@
 > [la sesión 2](spec2-ui-solida.md), que le pone interfaz.
 
 > Taller: **Día 1**. Estado: **probado** de punta a punta (incluido **multi-turno** y **REPL interactivo**).
-> Este spec es la **base**; de él nace **SPEC-2 (Día 2: interfaz web)** que lo consume por SSH/ACP.
+> Este spec es la **base**; de él nace la [sesión 2](spec2-ui-solida.md), la interfaz que lo consume.
 > Última actualización: 2026-08-28 · Objetivo: verificar el patrón de consumo de un agente (goose)
 > **oficial**, en una **caja limpia de EasyBits**, vía **ACP sobre SSH (túnel 443)**.
 
@@ -327,7 +327,7 @@ de ejecución de comandos; solo lectura/escritura y búsqueda”*.
 > **La ruta real es `/root/.ghosty/config.toml`** (no `~/.config/ghosty`); es donde `ghosty auth set`
 > escribe. Y si el agente se consume desde el **app web desplegado**, la copia de `server.mjs` en esa
 > caja **también** debe declarar `terminal: true` (la copia de trabajo ya lo trae, la desplegada se
-> queda atrás; ver SPEC-2 §12).
+> queda atrás; ver [`legacy/spec-web-spa.md`](../legacy/spec-web-spa.md) §12).
 
 > Con esto el agente ya puede `Bash`/editar archivos y levantar un servidor web dentro de su caja
 > (ej. `python3 -m http.server`, `npx vite`).
@@ -340,11 +340,12 @@ de ejecución de comandos; solo lectura/escritura y búsqueda”*.
 
 ---
 
-## 7. Siguiente paso → SPEC-2
+## 7. Siguiente paso → la sesión 2
 
 El **backend + interfaz web** que consume esta caja por SSH/ACP (chat en el navegador, streaming por
-SSE, una conversación = un hijo SSH) es el **Día 2** y vive en **`SPEC-2.md`**, que **nace de este spec**.
-Aquí sólo se deja lo probado; el diseño de producto va en SPEC-2.
+SSE, una conversación = un hijo SSH) es la **sesión 2** y vive en
+[`spec2-ui-solida.md`](spec2-ui-solida.md), que **nace de este spec**. Aquí sólo se deja lo
+probado; el diseño de producto va allá.
 
 ---
 
@@ -364,8 +365,8 @@ Aquí sólo se deja lo probado; el diseño de producto va en SPEC-2.
 | `acp-ghosty-poc/bash_e2e_probe.mjs` | probe: ghosty ejecuta shell por SSH (ver §6.5) |
 | `acp-ghosty-poc/app_e2e.mjs` | probe: bash a través del app desplegado (trayecto completo) |
 | `acp-ghosty-poc/tools_probe.mjs` | probe del catálogo de tools (no aplica a ghosty; usa goose) |
-| `acp-ghosty-poc/SPEC-1.md` | este spec (día 1) |
-| `acp-ghosty-poc/SPEC-2.md` | spec día 2 (interfaz web, nace de este) |
+| `docs/spec1-agente-fuera.md` | este spec (día 1) |
+| `acp-ghosty-poc/la sesión 2.md` | spec día 2 (interfaz web, nace de este) |
 | `~/.ghosty/sb_ed25519` (privada) | llave SSH cajas (no commitear) |
 | `~/.ghosty/.ebkey`, `~/.ghosty/.dstmp` | secrets locales (no commitear) |
 
