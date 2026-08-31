@@ -26,9 +26,9 @@ hechas y verificadas, las otras cuatro son planes con lo que ya se sabe y lo que
 | 1 | Vive fuera de tu compu y despierta cuando lo llamas | [`spec1-agente-fuera.md`](docs/spec1-agente-fuera.md) | ✅ |
 | 2 | UI propia, mostrando lo que hace mientras lo hace | [`spec2-ui-solida.md`](docs/spec2-ui-solida.md) | ✅ |
 | 3 | Lo matas a media tarea y revive donde iba | [`spec3-revivir.md`](docs/spec3-revivir.md) | plan |
-| 4 | Contesta por WhatsApp y te pide permiso desde ahí | [`spec4-whatsapp-permisos.md`](docs/spec4-whatsapp-permisos.md) | plan |
+| 4 | Contesta por WhatsApp y te pide permiso desde ahí | [`spec4-permisos-extensiones.md`](docs/spec4-permisos-extensiones.md) | plan |
 | 5 | Sólido, corriendo, y con forma de saber si se rompe | [`spec5-operacion.md`](docs/spec5-operacion.md) | plan |
-| 6 | Haciendo lo tuyo, no el ejercicio del taller | [`spec6-lo-tuyo.md`](docs/spec6-lo-tuyo.md) | plan |
+| 6 | Haciendo lo tuyo: habilidades | [`spec6-habilidades.md`](docs/spec6-habilidades.md) | plan |
 
 La app de la sesión 2 es la que vive en la raíz. Un primer intento de esa interfaz, en SPA, quedó
 en [`legacy/`](legacy/) con su documento.
