@@ -69,3 +69,9 @@ Lo que hay que resolver:
 - **Propuesta para EasyBits**, no para este repo: que `expose` mire qué está escuchando y, si sólo
   ve `127.0.0.1:<puerto>`, devuelva la URL con una advertencia en vez de dejar caer un 502 mudo.
   El problema no es la regla, es el diagnóstico.
+
+  De la pareja de mensajes engañosos, uno ya está resuelto: la descripción de
+  `sandbox_expose_port` aclara desde el 30 ago 2026 que sirve WebSocket sobre la misma URL, así que
+  nadie más debería montar un túnel de más. El campo `warning` para el caso del loopback todavía no
+  aparece: comprobado el 31 ago 2026 exponiendo un puerto sin nada escuchando, tanto por REST v2
+  como por la herramienta MCP; las dos devuelven `{ host, port, url }` y nada más.

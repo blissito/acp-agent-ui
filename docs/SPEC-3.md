@@ -126,7 +126,13 @@ general de las cajas, no como nota al pie — cualquier servicio que quieras alc
 bindea `0.0.0.0`.
 
 `sandbox_expose_port` **sí sirve `wss://`**: es capa 7 con TLS y Caddy pasa el `Upgrade` nativo. La
-misma URL acepta HTTPS y WebSocket; lo único rechazado es L4 crudo (22/23/25/445/3389 → 400).
+misma URL acepta HTTPS y WebSocket; lo único rechazado es L4 crudo (22/23/25/445/3389 → 400). Su
+documentación decía "HTTP ONLY" queriendo decir "no capa 4 cruda", y se leía como "sin WebSocket" —
+por eso hay recetas que montan un túnel que no hace falta. Corregido el 30 ago 2026; hoy la
+descripción de la herramienta dice, textual, que sirve HTTP y WebSocket "no tunnel … needed".
+
+Que la capacidad estuviera bien y el mensaje mal es el mismo patrón que el `--host`: en los dos
+casos lo que falla es lo que el usuario alcanza a leer, no lo que el sistema hace.
 
 ### 6.2 Un `\n` literal en el secreto
 
