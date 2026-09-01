@@ -1,4 +1,4 @@
-# Spec 1 — Día 1 · Agente ACP en caja EasyBits consumido por SSH
+# Spec 1 — Día 1 · ACP local hacia el editor, y el agente en una caja por WSS
 
 > Sesión 1 del taller: el agente viviendo fuera de tu compu. Sigue
 > [la sesión 2](spec2-ui-solida.md), que le pone interfaz.
@@ -15,6 +15,18 @@
 ---
 
 ## 1. Objetivo
+
+La sesión va en **dos partes**, y la primera no necesita ninguna caja:
+
+| | Parte | Dónde vive el agente | Transporte | Sección |
+|---|---|---|---|---|
+| **1** | ACP local hacia el editor | tu propia máquina | **stdio** | [§5.1](#51-parte-1--acp-local-hacia-el-editor) |
+| **2** | El agente en la caja | microVM de EasyBits | **WSS** (o SSH) | [§5.2](#52-parte-2--el-agente-en-la-caja-wss-hacia-el-editor) |
+
+El orden importa: en la parte 1 el alumno ve el protocolo completo —`initialize`, `session/new`,
+`session/prompt`, los permisos— sin túnel, sin puerto expuesto y sin nada que pueda fallar en la red.
+Cuando eso ya funciona, la parte 2 cambia **una sola cosa**: dónde corre el agente. El editor y el
+protocolo son los mismos, y por eso el salto se entiende.
 
 **Ese día 1** se demuestra y especifica cómo se consume un agente por el **Agent Client Protocol (ACP)**
 desde un cliente remoto, con el agente corriendo **dentro de una microVM de EasyBits** y el cliente
@@ -191,7 +203,91 @@ node ssh_client.mjs "un mensaje"  # one-shot
 | `goose run -t <texto>` | One-shot por la terminal. Ultil para diagnosticar el LLM. |
 | `goose configure` | Config interactiva (provider/model) — escribe `~/.config/goose/config.yaml`. |
 
-### 5.1 Variante WSS (sin SSH, sin cloudflared)
+### 5.1 Parte 1 — ACP local hacia el editor
+
+El camino más corto para ver ACP funcionando: **sin caja, sin túnel, sin puerto expuesto**. `goose acp`
+levanta un servidor ACP sobre **stdio**, y el editor lo lanza como proceso hijo y le habla por ahí.
+
+**1. El agente, local.** Se instala goose en tu máquina y se le configura EasyBits como proveedor —el
+mismo `.env` de [§4.4](#44-configurar-llm--easybits), pero en `~/.config/goose/`:
+
+```bash
+GOOSE_PROVIDER=openai
+GOOSE_MODEL=deepseek-v4-flash
+OPENAI_BASE_URL=https://www.easybits.cloud/api/v2/llm/v1
+OPENAI_API_KEY=eb_sk_live_...
+```
+
+**2. El editor.** En VS Code, la extensión **ACP Client** (`formulahendry.acp-client`, 0.2.0). Los
+agentes se declaran en `settings.json` bajo `acp.agents`, donde cada clave es el nombre que verás en
+el panel:
+
+```jsonc
+"acp.agents": {
+  "Goose local": {
+    "command": "/Users/tu-usuario/.local/bin/goose",
+    "args": ["acp"],
+    "env": {
+      "GOOSE_PROVIDER": "openai",
+      "GOOSE_MODEL": "deepseek-v4-flash",
+      "OPENAI_BASE_URL": "https://www.easybits.cloud/api/v2/llm/v1",
+      "OPENAI_API_KEY": "eb_sk_live_..."
+    }
+  }
+}
+```
+
+> **Ruta absoluta al binario.** El instalador deja goose en `~/.local/bin`, que no siempre está en el
+> `PATH` que hereda VS Code cuando se abre desde el Dock. Con `"command": "goose"` a secas, la
+> extensión falla con un *ENOENT* que no dice de dónde viene.
+
+**3. Conectar.** Paleta de comandos → `ACP: Connect Agent` → *Goose local*, y `ACP: Open Chat`.
+
+**Verificado (2026-08-31), goose 1.48.0 por stdio:**
+
+| Paso | Resultado |
+|---|---|
+| `initialize` | `protocolVersion: 1`; `loadSession: true`; `sessionCapabilities: list, delete, close` |
+| `session/new` | `sessionId: 20260831_1`, con cuatro modos: `auto`, `approve`, `smart_approve` y `chat` (sin herramientas) |
+| `session/prompt` | devolvió `ACP_LOCAL_OK` · `stopReason: end_turn` · 14 tokens de salida |
+| Permisos | `session/request_permission` llega igual que en remoto — el flujo no cambia |
+
+**El cliente presta su disco.** En `initialize`, VS Code declara `fs.readTextFile`,
+`fs.writeTextFile` y `terminal` en `true`; un probe de terminal los declara en `false`. El mismo
+agente tiene o no acceso a archivos según lo que **el cliente** ofrezca — no según lo que el agente
+decida. Es el punto entero de ACP, visible en el primer mensaje.
+
+`session/new` responde además con `configOptions` (provider, modo, modelo, `thinking_effort`) y sus
+valores posibles: de ahí saca el editor sus menús, y de ahí saldrán los selectores de la sesión 2.
+Antes de que escribas nada llegan dos notificaciones: `usage_update` con el contexto consumido, y
+`available_commands_update` con los slash commands **y las skills** (`commandType: "Skill"`) — la
+sesión 6 ya visible en el cable el día 1.
+
+Lo que se ve aquí es **el protocolo completo**, idéntico al de la parte 2. Lo único que cambia
+después es el transporte.
+
+---
+
+### 5.2 Parte 2 — El agente en la caja, WSS hacia el editor
+
+> **El SSH es opcional.** Toda la §4 monta la caja por túnel SSH porque el cliente ACP original
+> hablaba por stdio. Para la parte 2 no hace falta: la API REST trae `/exec` (comandos síncronos) y
+> `/bg` (procesos en background), así que instalar goose, escribir el `.env` y levantar `goose serve`
+> salen sin generar una sola llave. Verificado el 2026-08-31: un `/exec` con `uname -a` respondió en
+> **35 ms** sobre una caja recién creada.
+>
+> ```bash
+> curl -s -X POST https://www.easybits.cloud/api/v2/sandboxes/$SANDBOX_ID/exec \
+>   -H "Authorization: Bearer $EASYBITS_API_KEY" \
+>   -H "Content-Type: application/json" \
+>   -d '{"command":"uname -a; node --version"}'
+> # → {"exitCode":0,"stdout":"…","stderr":"","durationMs":35}
+> ```
+>
+> En clase esto importa: ocho alumnos generando llaves ed25519 y peleando con permisos de archivo se
+> come el bloque entero.
+
+
 
 > **EasyBits termina TLS en el edge.** `sandbox_expose_port` **no** da HTTP plano: expone
 > `https://sb-<uuid>-<port>.sandboxes.easybits.cloud` con **cert wildcard** para `*.sandboxes.easybits.cloud`
@@ -216,6 +312,28 @@ node ssh_client.mjs "un mensaje"  # one-shot
 > `ghosty-acp` (`npm i -g ghosty-acp`, v0.0.2, sin deps) es el puente oficial del taller: conecta tu
 > editor a un agente ACP remoto, sin tocar SSH en el cliente. Requiere Node 22+; en VS Code hace falta
 > además la extensión **ACP Client**.
+
+**En el editor**, el agente remoto se declara igual que el local — cambia el comando, no la forma. Se
+puede tener los dos dados de alta al mismo tiempo y alternar desde el panel:
+
+```jsonc
+"acp.agents": {
+  "Goose local": { "command": "/Users/tu-usuario/.local/bin/goose", "args": ["acp"], "env": { } },
+  "Goose en caja": {
+    "command": "ghosty-acp",
+    "args": ["wss://sb-<uuid>-3000.sandboxes.easybits.cloud/acp"],
+    "env": {}
+  }
+}
+```
+
+Aquí el `env` del agente remoto va **vacío a propósito**: la key del LLM vive dentro de la caja, en
+`/root/.config/goose/.env`, y nunca baja al editor. Es la diferencia práctica entre las dos partes —
+en la local, tu llave está en `settings.json`.
+
+> **Pendiente de verificar.** El handshake WSS sí está probado (tabla de abajo), pero el turno
+> completo *desde VS Code* a través de `ghosty-acp` todavía no se corrió en esta máquina: el puente no
+> está instalado. Hacerlo antes de la sesión.
 
 **Verificado en el taller (2026-08-30), goose por WSS:**
 
@@ -269,6 +387,28 @@ ghosty doctor
 ghosty exec "Responde: OK"                # one-shot
 /root/.local/bin/ghosty serve --acp        # servidor ACP sobre stdio (para el túnel SSH)
 ```
+
+> **No existe `ghosty acp` a secas** — el subcomando es `serve --acp` ("Start ACP server over stdio
+> for editor clients"). Lanzado sin `--acp`, ghosty intenta abrir la TUI y muere pidiendo un TTY.
+
+**En el editor** (verificado con ghosty 0.0.19, 2026-08-31):
+
+```jsonc
+"Ghosty local": { "command": "/Users/tu-usuario/.local/bin/ghosty", "args": ["serve", "--acp"], "env": {} }
+```
+
+**Trampa: el provider configurado sin llave.** Con `provider = easybits` pero la credencial vacía,
+el primer `session/prompt` devuelve un `-32603` que no menciona la llave:
+
+```
+model `deepseek-v4-pro` is available from configured provider route(s): sglang, vllm.
+Pass `--provider <provider>` with `--model deepseek-v4-pro` to choose one explicitly.
+```
+
+El mensaje invita a elegir provider, pero el problema es otro: sin llave, easybits deja de ser ruta
+válida y sólo quedan las que no piden credencial. Se diagnostica con `ghosty auth status` —la
+columna de easybits dice `unset`— y se arregla con `ghosty auth set --provider easybits --api-key
+eb_sk_live_...`. Después de eso, el mismo prompt cierra con `stopReason: end_turn`.
 
 ### 6.4 Alternar goose ↔ ghosty en el app
 

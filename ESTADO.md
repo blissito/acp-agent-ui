@@ -52,6 +52,8 @@ demás se apoya en que el estado sobreviva.
 
 Dos cosas sueltas antes de empezar:
 
-- `.agents/skills/react-router/` viene del scaffold y no lo usamos; se puede borrar.
+- `.agents/skills/react-router/` viene del scaffold. **No borrar**: en la sesión 1 sirve de
+  ejemplo en vivo de que las skills salen del `cwd` que viaja en `session/new` — goose la lee
+  del proyecto y la anuncia al editor en `available_commands_update`.
 - El `Dockerfile` es el del scaffold y hace `npm start`, que ahora exige `.env`: si se despliega en
   Fly, las variables van como secrets.
