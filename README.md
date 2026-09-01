@@ -59,8 +59,9 @@ AGENT_BOX_ID=sb_<id>
 
 **Llénalas las cuatro.** Si dejas una vacía, `app/.server/acp.ts` cae a su valor
 por defecto —que apunta a otra caja— y el síntoma es un 401 que parece de
-credenciales. `AGENT_BOX_ID` sólo se usa para despertar y suspender la caja: si
-la tuya ya está arriba, no cambia nada.
+credenciales. `AGENT_BOX_ID` se usa para extender el TTL de la caja, suspenderla
+al ocio y avisar con claridad si ya no existe. Despertarla no hace falta: el
+propio `Upgrade` del WebSocket la despierta (verificado el 1 sep 2026).
 
 Producción:
 

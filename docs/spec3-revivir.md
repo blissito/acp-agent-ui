@@ -28,7 +28,8 @@ nuestra.** El `Map` deja de ser el registro y pasa a ser un caché.
 
 1. Que `/sessions` liste `session/list` del agente en vez del `Map` del proceso.
 2. Que `/c/:id` haga `session/load` cuando no tiene la sesión en memoria.
-3. Reconectar el SSE a una sesión que ya existía, sin crear una nueva.
+3. Reconectar el SSE a una sesión que ya existía, sin crear una nueva. Si la caja se durmió en
+   medio, el reconnect del WSS la despierta solo: no hace falta llamar a `ensureAgentBox` aquí.
 4. Matar el server a media respuesta y comprobar qué sobrevive: ¿el turno se pierde, se reanuda, o
    queda a medias en el historial del agente?
 
@@ -37,5 +38,5 @@ nuestra.** El `Map` deja de ser el registro y pasa a ser un caché.
 - **Qué pasa con un turno interrumpido.** Es la pregunta de la sesión y hay que responderla con la
   prueba, no con la doc.
 - **`session/cancel`.** El botón de parar está dibujado y no interrumpe; toca aquí.
-- **Si la caja se suspende a media tarea.** El `ensureAgentBox` la despierta al hablarle, pero el
-  turno en vuelo ya murió.
+- **Si la caja se suspende a media tarea.** La despierta el propio `Upgrade` del WebSocket al
+  reconectar (verificado el 1 sep 2026), pero el turno en vuelo ya murió con la suspensión.

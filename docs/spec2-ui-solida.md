@@ -106,7 +106,11 @@ al navegar. Verificado en 375×812.
 > otro programa.
 
 La caja del agente se suspende al quedar inactiva, y al despertar **nadie relanzaba `goose serve`**.
-El síntoma era un 401 intermitente que parecía de credenciales y era de que no había servidor.
+El síntoma era un 401 intermitente que parecía de credenciales.
+
+> **Pendiente de re-verificar** (anotado el 1 sep 2026): un `goose serve` caído debería dar un 502
+> del proxy, no un 401. La atribución "401 = no había servidor" se hizo de oídas; repetir la prueba
+> con la unidad parada antes de darla por hecho.
 La caja ahora trae una unidad que arranca sola:
 
 ```ini

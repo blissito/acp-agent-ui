@@ -109,7 +109,13 @@ Flujo verificada:
 ### 4.1 Caja limpia
 
 - Template: `dev-box` (Debian 12, x86_64, Node 22, git, curl; nace sin credenciales).
-- `sandbox_create` (template `dev-box`, `name=goose-demo`) → devuelve **`SANDBOX_ID`**; esperar `running`.
+- `sandbox_create` (template `dev-box`, `name=goose-demo`, **`suspendOnIdle: true`**,
+  `hardTtlSeconds` largo) → devuelve **`SANDBOX_ID`**; esperar `running`.
+
+  > Sin `suspendOnIdle` la caja se **destruye** al vencer `timeoutSeconds`, y el default son 300 s.
+  > Con él, al ociar se duerme (snapshot de Firecracker) y despierta con cualquier petición a su URL
+  > pública, incluido el `Upgrade` de un WebSocket. Una caja destruida es un `sandboxId` nuevo y una
+  > URL distinta: todo lo que apunte a la vieja deja de servir.
 - `sandbox_ssh_enable` (con **`SSH_PUBKEY`** dedicada) → devuelve endpoint directo y **comando de túnel**
   (`ssh <SANDBOX_ID>.ghosty`).
 
@@ -353,7 +359,8 @@ export GOOSE_PROVIDER=openai GOOSE_MODEL=deepseek-v4-flash \
 | Handshake WS | Da `101 Switching Protocols`; hay que negociar HTTP/1.1 (curl con HTTP/2 tira los headers de upgrade) |
 | Probe e2e | `initialize` → `agentInfo goose 1.48.0` · `session/new` · `session/prompt` → `ACP_WSS_OK` |
 | Identidad persistente | `GOOSE_MOIM_MESSAGE_TEXT` inyecta instrucciones cada turno (ej. nombre del agente) |
-| Latencia primer turno | Tras conectar, el primer prompt puede tardar unos segundos (caja fría) |
+| Caja dormida | El `Upgrade` a WebSocket la despierta solo (`suspended → running`), sin ninguna petición HTTP previa: el proxy público hace `acquire` antes de enrutar. Verificado dos veces el 2026-09-01 |
+| Latencia primer turno | Tras conectar, el primer prompt puede tardar unos segundos: es el resume de la caja que disparó el propio upgrade |
 
 ---
 

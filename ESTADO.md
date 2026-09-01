@@ -31,8 +31,9 @@ entorno.
 
 ## Lo que hay que saber
 
-- **La caja se suspende sola** al quedar inactiva. La app la despierta al hablarle
-  (`ensureAgentBox`), y la unidad de systemd relanza `goose serve` al arrancar. Antes de eso, cada
+- **La caja se suspende sola** al quedar inactiva. La despierta el propio `Upgrade` del WebSocket
+  (verificado el 1 sep 2026); `ensureAgentBox` sólo extiende el TTL, suspende al ocio y avisa si la
+  caja ya no existe. La unidad de systemd relanza `goose serve` al arrancar. Antes de eso, cada
   suspensión dejaba la app muerta con un 401 que parecía de credenciales.
 - **Node 22.16 contra 22.22.** React Router pide ≥ 22.22 y avisa en cada arranque; funciona igual.
   Vale la pena subir la versión para dejar de leer el aviso.
