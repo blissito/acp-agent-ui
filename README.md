@@ -48,6 +48,20 @@ cp .env.example .env      # y llénalo
 npm run dev               # http://localhost:5173
 ```
 
+El `.env` lleva cuatro variables:
+
+```sh
+ACP_WS_URL=wss://sb-<id>-3000.sandboxes.easybits.cloud/acp   # la URL de expose, con wss://
+ACP_SECRET=<GOOSE_SERVER__SECRET_KEY de la caja>
+ACP_CWD=/root                                                # dónde abre sus sesiones el agente
+AGENT_BOX_ID=sb_<id>
+```
+
+**Llénalas las cuatro.** Si dejas una vacía, `app/.server/acp.ts` cae a su valor
+por defecto —que apunta a otra caja— y el síntoma es un 401 que parece de
+credenciales. `AGENT_BOX_ID` sólo se usa para despertar y suspender la caja: si
+la tuya ya está arriba, no cambia nada.
+
 Producción:
 
 ```sh
