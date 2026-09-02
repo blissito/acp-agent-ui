@@ -10,6 +10,7 @@ import { ChatInputCard } from "~/components/ChatInputCard";
 import { ChatInput } from "~/components/ChatInput";
 import { Markdown } from "~/components/Markdown";
 import { MessageUsageStats } from "~/components/MessageUsageStats";
+import { ConnectingState } from "~/components/ConnectingState";
 import { useAcpStream, type ToolEntry, type Turn } from "~/hooks/useAcpStream";
 import { config, getConversation, getMessages } from "~/.server/acp";
 
@@ -100,7 +101,7 @@ export default function Chat() {
   const { id, cwd, messages } = useLoaderData<typeof loader>();
   const location = useLocation();
   const firstMessage = (location.state as { firstMessage?: string } | null)?.firstMessage;
-  const { turns, busy, connected, error, send } = useAcpStream(
+  const { turns, busy, connected, phase, error, send } = useAcpStream(
     id,
     messages as Turn[]
   );
@@ -124,6 +125,9 @@ export default function Chat() {
       <div className="flex h-full min-h-0 flex-col">
         <div className="min-h-0 flex-1 overflow-y-auto">
           <div className="mx-auto flex w-full max-w-3xl flex-col gap-6 px-4 py-8 sm:px-6">
+            {!connected && turns.length === 0 && (
+              <ConnectingState phase={phase} error={error} />
+            )}
             {turns.map((turn, i) => (
               <Bubble key={i} turn={turn} />
             ))}
@@ -139,7 +143,9 @@ export default function Chat() {
                 ))}
               </div>
             )}
-            {error && <p className="text-sm text-text-danger">{error}</p>}
+            {error && (connected || turns.length > 0) && (
+              <p className="text-sm text-text-danger">{error}</p>
+            )}
             <div ref={bottom} />
           </div>
         </div>

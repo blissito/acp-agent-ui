@@ -4,6 +4,9 @@
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 
+/** Por dónde va la conexión con el agente antes del primer `started`. */
+export type ConnectPhase = "waking" | "connecting" | "session";
+
 export interface ToolEntry {
   id: string;
   title?: string;
@@ -31,6 +34,7 @@ export function useAcpStream(conversationId: string, initial: Turn[] = []) {
   const [busy, setBusy] = useState(false);
   const [connected, setConnected] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [phase, setPhase] = useState<ConnectPhase>("waking");
   const [usage, setUsage] = useState<Usage | null>(null);
   const streaming = useRef(false);
 
@@ -66,6 +70,7 @@ export function useAcpStream(conversationId: string, initial: Turn[] = []) {
       });
 
     es.addEventListener("started", () => setConnected(true));
+    es.addEventListener("status", (e) => setPhase(JSON.parse((e as MessageEvent).data).phase));
     es.addEventListener("chunk", (e) => appendChunk(JSON.parse((e as MessageEvent).data).text));
     es.addEventListener("thought", (e) => appendThought(JSON.parse((e as MessageEvent).data).text));
     es.addEventListener("tool", (e) => upsertTool(JSON.parse((e as MessageEvent).data)));
@@ -109,5 +114,5 @@ export function useAcpStream(conversationId: string, initial: Turn[] = []) {
     [conversationId]
   );
 
-  return { turns, busy, connected, error, usage, send };
+  return { turns, busy, connected, phase, error, usage, send };
 }

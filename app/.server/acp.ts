@@ -10,6 +10,7 @@ import { readFileSync } from "node:fs";
 import { client } from "@agentclientprotocol/sdk";
 import { createWebSocketStream } from "@agentclientprotocol/sdk/experimental/ws-client";
 import { WebSocket } from "ws";
+import type { ConnectPhase } from "~/hooks/useAcpStream";
 
 const WS_URL =
   process.env.ACP_WS_URL ??
@@ -115,7 +116,15 @@ export type AcpEvent =
   | { type: "usage"; used: number; size: number; cost: number }
   | { type: "done"; stopReason: string; usage: unknown }
   | { type: "error"; message: string }
+  // Por dónde va la conexión, para que la UI no diga "Conectando…" a secas
+  // durante los ~15s que tarda despertar una caja dormida.
+  | { type: "status"; phase: ConnectPhase }
   | { type: "closed" };
+
+
+// Un handshake que no responde no debe dejar la UI esperando para siempre:
+// un 401 del WSS (secret ausente) o una caja que no contesta se ven así.
+const CONNECT_TIMEOUT_MS = Number(process.env.ACP_CONNECT_TIMEOUT_MS ?? 60_000);
 
 export interface StoredMessage {
   role: "user" | "assistant";
@@ -131,6 +140,8 @@ class GooseSession extends EventEmitter {
   busy = false;
   ready = false;
   closed = false;
+  phase: ConnectPhase = "waking";
+  lastError: string | null = null;
   cost = 0;
   tokens = 0;
   contextSize = 0;
@@ -160,8 +171,43 @@ class GooseSession extends EventEmitter {
     this.idleTimer.unref?.();
   }
 
-  connect() {
-    return this.handshake().catch((e) => this.emit("event", { type: "error", message: e.message }));
+  private setPhase(phase: ConnectPhase) {
+    this.phase = phase;
+    this.emit("event", { type: "status", phase });
+  }
+
+  async connect() {
+    try {
+      this.setPhase("waking");
+      await ensureAgentBox().catch((e) =>
+        console.warn("[lifecycle] ensureAgentBox:", e.message)
+      );
+      this.setPhase("connecting");
+      let timer: NodeJS.Timeout | null = null;
+      const timeout = new Promise<never>((_, reject) => {
+        timer = setTimeout(
+          () =>
+            reject(
+              new Error(
+                `El agente no respondió en ${Math.round(CONNECT_TIMEOUT_MS / 1000)}s. Revisa que la caja esté viva y que ACP_SECRET sea el de esa caja.`
+              )
+            ),
+          CONNECT_TIMEOUT_MS
+        );
+        timer.unref?.();
+      });
+      await Promise.race([this.handshake(), timeout]);
+      if (timer) clearTimeout(timer);
+    } catch (e) {
+      const raw = (e as Error).message;
+      // "Unexpected server response: 401" no le dice nada a quien lo ve.
+      this.lastError = /\b401\b/.test(raw)
+        ? "La caja rechazó la conexión (401): ACP_SECRET no es el GOOSE_SERVER__SECRET_KEY de esa caja."
+        : /\b(404|502|503)\b/.test(raw)
+          ? `La caja no está sirviendo el agente (${raw}). ¿Está viva y con goose escuchando en :3000?`
+          : raw;
+      this.emit("event", { type: "error", message: this.lastError });
+    }
   }
 
   private async handshake() {
@@ -197,6 +243,7 @@ class GooseSession extends EventEmitter {
         terminal: false,
       },
     });
+    this.setPhase("session");
     this.session = await ctx.buildSession({ cwd: this.cwd, mcpServers: [] }).start();
     this.sessionId = this.session.sessionId;
     this.ready = true;
@@ -323,12 +370,11 @@ export async function createConversation() {
   if (conversations.size >= MAX_CONVERSATIONS) {
     throw new Error("too many conversations");
   }
-  await ensureAgentBox().catch((e) =>
-    console.warn("[lifecycle] ensureAgentBox:", e.message)
-  );
+  // La caja se despierta DENTRO de connect(): así el navegador aterriza en la
+  // conversación al instante y ve las fases, en vez de esperar el POST a ciegas.
   const id = randomUUID();
   const s = new GooseSession(WS_URL, SECRET, CWD);
-  s.connect();
+  void s.connect();
   conversations.set(id, s);
   s.on("event", (e: AcpEvent) => {
     if (e.type === "closed" && conversations.get(id) === s) conversations.delete(id);
@@ -376,6 +422,9 @@ export function subscribe(id: string, onEvent: (e: AcpEvent) => void) {
   // se le repite para que el input no se quede en "Conectando…".
   if (s.ready && s.sessionId && !s.closed) {
     onEvent({ type: "started", sessionId: s.sessionId });
+  } else if (!s.closed) {
+    onEvent({ type: "status", phase: s.phase });
+    if (s.lastError) onEvent({ type: "error", message: s.lastError });
   }
   return () => s.off("event", handler);
 }
