@@ -40,6 +40,10 @@ function tokensToCss(): string {
   ].join("\n");
 }
 
+export function links() {
+  return [{ rel: "icon", type: "image/png", href: "/favicon.png" }];
+}
+
 export function Layout({ children }: { children: React.ReactNode }) {
   // Layout también renderiza las páginas de error, donde el loader pudo no
   // haber corrido; ahí se cae al tema del sistema.

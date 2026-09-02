@@ -73,6 +73,7 @@ El navegador nunca habla ACP. El `EventSource` recibe eventos ya traducidos
 | `/sessions` | Historial de las conversaciones vivas del proceso. |
 | `/settings` | Tema (funciona) + la conexión al agente en modo lectura. |
 | `/recipes` `/skills` `/apps` `/schedules` `/extensions` | Encabezado y estado vacío. |
+| `/whatsapp` | Cascarón para la sesión 4: QR de vinculación y estado del canal. |
 
 Las cinco últimas están en cascarón a propósito, y completarlas es más barato de lo que parece:
 **todas se llenan por ACP**, con métodos de extensión sobre la conexión que ya existe.

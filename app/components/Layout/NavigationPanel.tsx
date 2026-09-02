@@ -11,6 +11,7 @@ import {
   Clock,
   FileText,
   History,
+  MessageCircle,
   MessageSquarePlus,
   Puzzle,
   Settings,
@@ -35,6 +36,7 @@ const NAV_ITEMS: NavItem[] = [
   { id: "apps", path: "/apps", label: "Apps", icon: AppWindow },
   { id: "schedules", path: "/schedules", label: "Agenda", icon: Clock },
   { id: "extensions", path: "/extensions", label: "Extensiones", icon: Puzzle },
+  { id: "whatsapp", path: "/whatsapp", label: "WhatsApp", icon: MessageCircle },
   { id: "sessions", path: "/sessions", label: "Historial", icon: History },
 ];
 

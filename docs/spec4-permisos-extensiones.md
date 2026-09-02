@@ -38,3 +38,47 @@ preguntar son la misma conversación.
   respuesta depende de qué extensiones tenga conectadas.
 - **Si un permiso se recuerda.** ACP ofrece `allow_once` y opciones permanentes: ¿quién decide que
   algo deja de preguntarse?
+
+## La vista `/whatsapp`
+
+Ya existe en cascarón (`app/routes/whatsapp.tsx`, entrada en el panel debajo de Extensiones). Es
+la sección que la landing promete: "la integración va dada, ustedes la conectan". El canal son
+**grupos**, no chats 1:1: el agente vive en un grupo con las personas que lo operan.
+
+Requisito: la app hosteada (sesión 3). El canal necesita una URL pública estable.
+
+### Qué se ve
+
+1. **Sin vincular.** El QR ya pintado al abrir; se renueva solo (60 s el primero, 20 s los
+   siguientes). Sin botón de "generar". Debajo, "Vincular con código": pides el número y sale el
+   código de 8 caracteres (`XXXX-XXXX`) para WhatsApp → Dispositivos vinculados → Vincular con
+   número. QR y código son excluyentes: pedir uno cancela el otro. En la práctica el código suele
+   vincular mejor que el QR; se ofrecen los dos. El estado llega por SSE, igual que el chat.
+2. **Conectado.** Número, nombre del teléfono, "conectado desde", botón Desvincular.
+3. **Grupos.** Lista de los grupos donde está el número, con checkbox. Sin marcar, el agente
+   calla en todos. Aquí vive el "un agente con permiso manda mil".
+4. **Un mensaje en un grupo marcado es un turno** del mismo motor (`app/.server/acp.ts`). Se ve
+   en `/c/:id`: dos clientes, una conversación.
+5. **El permiso llega al grupo.** `session/request_permission` deja de auto-aprobarse: la
+   pregunta sale al grupo con sus opciones (`optionId`), se contesta ahí y el turno sigue. La web
+   sólo lo muestra como pendiente; no lo decide.
+
+### Qué se copia y de dónde
+
+La máquina de estados y la persistencia vienen de easybits
+(`app/.server/integrations/whatsapp/baileys.server.ts`): Baileys, estados
+`disconnected → connecting → qr_pending | pairing → connected | failed`, credenciales en base de datos con
+flush de llaves con debounce de 600 ms (sin él el pairing se rompe), y `groupFetchAllParticipating`
+con caché de 60 s para la lista de grupos. La sesión de WhatsApp va al almacén que decida la
+sesión 3, para que sobreviva al deploy. El QR nunca se guarda.
+
+### Fuera de alcance, a propósito
+
+- Decidir el permiso desde la web: doble sincronía que no enseña más.
+- Bandeja de chats: lo que entra ya se ve en `/c/:id`.
+- Usuarios: quien tenga el link opera el canal. Se anota como límite.
+
+### Por decidir
+
+- Timeout de un permiso sin respuesta en el grupo.
+- Si una decisión se recuerda (`allow_once` vs permanente) y quién la toma.

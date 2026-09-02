@@ -20,6 +20,7 @@ export default [
     route("apps", "routes/apps.tsx"),
     route("schedules", "routes/schedules.tsx"),
     route("extensions", "routes/extensions.tsx"),
+    route("whatsapp", "routes/whatsapp.tsx"),
     route("settings", "routes/settings.tsx"),
   ]),
 ] satisfies RouteConfig;
