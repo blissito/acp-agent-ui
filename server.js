@@ -23,8 +23,9 @@ app.use(
 app.use(express.static("build/client", { maxAge: "1h" }));
 app.use(morgan("tiny"));
 
-app.all(
-  "*",
+// Express 5 ya no acepta "*" como ruta (path-to-regexp 8 exige nombre en el
+// comodín); `use` sin ruta atrapa todo lo que no fue estático, que es lo mismo.
+app.use(
   createRequestHandler({
     build: () => import("./build/server/index.js"),
   })
