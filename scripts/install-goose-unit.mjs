@@ -61,11 +61,12 @@ if (r.stderr) console.log("stderr:", r.stderr.trim().split("\n").slice(-3).join(
 const exp = await rest(`/sandboxes/${ID}/expose`, { method: "POST", body: { port: 3000 } });
 console.log("expuesto:", exp.url);
 
-// El secret se guarda en el .env local de web3; nunca se imprime.
+// El secret se guarda en el .env local; nunca se imprime. La llave de EasyBits
+// se conserva: sin ella la app no gestiona el ciclo de vida de la caja.
 const envPath = new URL("../.env", import.meta.url).pathname;
 writeFileSync(
   envPath,
-  `ACP_WS_URL=${exp.url.replace(/^https/, "wss")}/acp\nACP_SECRET=${SECRET}\nACP_CWD=/root\nAGENT_BOX_ID=${ID}\n`,
+  `ACP_WS_URL=${exp.url.replace(/^https/, "wss")}/acp\nACP_SECRET=${SECRET}\nACP_CWD=/root\nAGENT_BOX_ID=${ID}\nEASYBITS_API_KEY=${KEY}\n`,
   { mode: 0o600 }
 );
 console.log("escrito:", envPath, "(secret dentro, no en pantalla)");

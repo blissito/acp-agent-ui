@@ -62,7 +62,9 @@ export async function ensureAgentBox() {
   await sb.refresh();
   console.log(`[lifecycle] caja agente status=${sb.status}`);
   if (sb.status === "running") {
-    await sb.extend(3600).catch(() => {});
+    await sb.extend(3600).catch((e: Error) =>
+      console.warn("[lifecycle] extend falló:", e.message)
+    );
     return sb;
   }
   if (sb.status === "suspended") await sb.resume().catch(() => {});
@@ -100,7 +102,16 @@ export type AcpEvent =
   | { type: "started"; sessionId: string }
   | { type: "chunk"; text: string }
   | { type: "thought"; text: string }
-  | { type: "tool"; title: string; optionId: string }
+  | {
+      // Una herramienta del agente: tool_call la crea, tool_call_update la
+      // avanza. El mismo id llega varias veces; el navegador hace upsert.
+      type: "tool";
+      id: string;
+      title?: string;
+      kind?: string;
+      status?: string;
+      path?: string;
+    }
   | { type: "usage"; used: number; size: number; cost: number }
   | { type: "done"; stopReason: string; usage: unknown }
   | { type: "error"; message: string }
@@ -161,10 +172,15 @@ class GooseSession extends EventEmitter {
     const app = client({ name: "acp-web3" } as any);
     app.onRequest("session/request_permission", ({ params }: any) => {
       const options = params.options ?? [];
-      const title = params.toolCall?.title ?? "herramienta";
       const allow = options.find((o: any) => o.kind === "allow_once") ?? options[0];
       const optionId = allow?.optionId ?? options[0]?.optionId;
-      this.emit("event", { type: "tool", title, optionId: optionId ?? "?" });
+      // Se auto-aprueba (tema de la sesión 4), pero la petición se enseña.
+      this.emit("event", {
+        type: "tool",
+        id: params.toolCall?.toolCallId ?? "?",
+        title: params.toolCall?.title ?? "herramienta",
+        status: "pending",
+      });
       return { outcome: { outcome: "selected", optionId } };
     });
 
@@ -175,7 +191,10 @@ class GooseSession extends EventEmitter {
       protocolVersion: 1,
       clientCapabilities: {
         fs: { readTextFile: false, writeTextFile: false },
-        terminal: true,
+        // Sin terminal del lado del cliente: el agente corre el shell en su
+        // propia caja. Con true, goose pide terminal/create y, como no lo
+        // implementamos, cada shell termina en failed.
+        terminal: false,
       },
     });
     this.session = await ctx.buildSession({ cwd: this.cwd, mcpServers: [] }).start();
@@ -219,6 +238,18 @@ class GooseSession extends EventEmitter {
         } else if (u.sessionUpdate === "agent_thought_chunk") {
           const t = u.content?.text ?? "";
           if (t) this.emit("event", { type: "thought", text: t });
+        } else if (
+          u.sessionUpdate === "tool_call" ||
+          u.sessionUpdate === "tool_call_update"
+        ) {
+          // En el update sólo viajan los campos que cambiaron; los null se omiten.
+          const ev: AcpEvent = { type: "tool", id: u.toolCallId };
+          if (u.title) ev.title = u.title;
+          if (u.kind) ev.kind = u.kind;
+          if (u.status) ev.status = u.status;
+          const path = u.locations?.[0]?.path;
+          if (path) ev.path = path;
+          this.emit("event", ev);
         } else if (u.sessionUpdate === "usage_update") {
           const used = u.used ?? 0;
           const size = u.size ?? 0;
@@ -341,6 +372,11 @@ export function subscribe(id: string, onEvent: (e: AcpEvent) => void) {
   if (!s) return null;
   const handler = (e: AcpEvent) => onEvent(e);
   s.on("event", handler);
+  // Quien llega tarde (recarga, segunda pestaña) no vio el started original:
+  // se le repite para que el input no se quede en "Conectando…".
+  if (s.ready && s.sessionId && !s.closed) {
+    onEvent({ type: "started", sessionId: s.sessionId });
+  }
   return () => s.off("event", handler);
 }
 
