@@ -4,9 +4,19 @@
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 
+export interface ToolEntry {
+  id: string;
+  title?: string;
+  kind?: string;
+  status?: string;
+  path?: string;
+}
+
 export interface Turn {
   role: "user" | "assistant";
   text: string;
+  thought?: string;
+  tools?: ToolEntry[];
   usage?: { used: number; size: number; cost: number };
 }
 
@@ -21,32 +31,44 @@ export function useAcpStream(conversationId: string, initial: Turn[] = []) {
   const [busy, setBusy] = useState(false);
   const [connected, setConnected] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [tools, setTools] = useState<string[]>([]);
   const [usage, setUsage] = useState<Usage | null>(null);
   const streaming = useRef(false);
 
   useEffect(() => {
     const es = new EventSource(`/api/conversations/${conversationId}/events`);
 
-    const appendChunk = (text: string) => {
+    // Todo lo que llega durante un turno (texto, pensamiento, herramientas)
+    // cae en el mismo mensaje del asistente; si aún no existe, se crea.
+    const patchCurrent = (patch: (turn: Turn) => Turn) => {
       setTurns((prev) => {
         const next = [...prev];
         const last = next[next.length - 1];
         if (streaming.current && last?.role === "assistant") {
-          next[next.length - 1] = { ...last, text: last.text + text };
+          next[next.length - 1] = patch(last);
           return next;
         }
         streaming.current = true;
-        return [...next, { role: "assistant", text }];
+        return [...next, patch({ role: "assistant", text: "" })];
       });
     };
+    const appendChunk = (text: string) =>
+      patchCurrent((t) => ({ ...t, text: t.text + text }));
+    const appendThought = (text: string) =>
+      patchCurrent((t) => ({ ...t, thought: (t.thought ?? "") + text }));
+    // Upsert por id: tool_call crea la fila, tool_call_update la completa.
+    const upsertTool = (entry: ToolEntry) =>
+      patchCurrent((t) => {
+        const tools = [...(t.tools ?? [])];
+        const i = tools.findIndex((x) => x.id === entry.id);
+        if (i === -1) tools.push(entry);
+        else tools[i] = { ...tools[i], ...entry };
+        return { ...t, tools };
+      });
 
     es.addEventListener("started", () => setConnected(true));
     es.addEventListener("chunk", (e) => appendChunk(JSON.parse((e as MessageEvent).data).text));
-    es.addEventListener("tool", (e) => {
-      const { title } = JSON.parse((e as MessageEvent).data);
-      setTools((prev) => [...prev, title]);
-    });
+    es.addEventListener("thought", (e) => appendThought(JSON.parse((e as MessageEvent).data).text));
+    es.addEventListener("tool", (e) => upsertTool(JSON.parse((e as MessageEvent).data)));
     es.addEventListener("usage", (e) => {
       const u = JSON.parse((e as MessageEvent).data) as Usage;
       setUsage(u);
@@ -60,7 +82,6 @@ export function useAcpStream(conversationId: string, initial: Turn[] = []) {
     es.addEventListener("done", () => {
       streaming.current = false;
       setBusy(false);
-      setTools([]);
     });
     es.addEventListener("error", (e) => {
       const data = (e as MessageEvent).data;
@@ -88,5 +109,5 @@ export function useAcpStream(conversationId: string, initial: Turn[] = []) {
     [conversationId]
   );
 
-  return { turns, busy, connected, error, tools, usage, send };
+  return { turns, busy, connected, error, usage, send };
 }

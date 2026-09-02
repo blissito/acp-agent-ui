@@ -10,7 +10,7 @@ import { ChatInputCard } from "~/components/ChatInputCard";
 import { ChatInput } from "~/components/ChatInput";
 import { Markdown } from "~/components/Markdown";
 import { MessageUsageStats } from "~/components/MessageUsageStats";
-import { useAcpStream, type Turn } from "~/hooks/useAcpStream";
+import { useAcpStream, type ToolEntry, type Turn } from "~/hooks/useAcpStream";
 import { config, getConversation, getMessages } from "~/.server/acp";
 
 export async function loader({ params }: Route.LoaderArgs) {
@@ -38,9 +38,61 @@ function Bubble({ turn }: { turn: Turn }) {
   }
   return (
     <div className="max-w-[90%]">
-      <Markdown>{turn.text}</Markdown>
+      {turn.thought && (
+        <details className="mb-3 text-xs text-text-secondary">
+          <summary className="cursor-pointer select-none">Pensando…</summary>
+          <p className="mt-2 whitespace-pre-wrap border-l-2 border-border-secondary pl-3">
+            {turn.thought}
+          </p>
+        </details>
+      )}
+      {turn.tools && turn.tools.length > 0 && (
+        <ul className="mb-3 flex flex-col gap-1">
+          {turn.tools.map((tool) => (
+            <ToolRow key={tool.id} tool={tool} />
+          ))}
+        </ul>
+      )}
+      {turn.text && <Markdown>{turn.text}</Markdown>}
       {turn.usage && <MessageUsageStats {...turn.usage} />}
     </div>
+  );
+}
+
+// Una herramienta del agente, con su estado según ACP:
+// pending → in_progress → completed | failed.
+const STATUS_ICON: Record<string, string> = {
+  pending: "⏳",
+  in_progress: "●",
+  completed: "✓",
+  failed: "✗",
+};
+
+function ToolRow({ tool }: { tool: ToolEntry }) {
+  const status = tool.status ?? "pending";
+  const color =
+    status === "failed"
+      ? "text-text-danger"
+      : status === "completed"
+        ? "text-text-success"
+        : "text-text-warning";
+  return (
+    <li className="flex min-w-0 items-baseline gap-2 text-xs">
+      <span className={`shrink-0 ${color}`} aria-label={status}>
+        {STATUS_ICON[status] ?? "•"}
+      </span>
+      {tool.kind && (
+        <span className="shrink-0 rounded bg-background-secondary px-1 font-mono text-text-secondary">
+          {tool.kind}
+        </span>
+      )}
+      <span className="min-w-0 truncate text-text-primary">{tool.title ?? tool.id}</span>
+      {tool.path && (
+        <span className="hidden min-w-0 truncate font-mono text-text-tertiary sm:inline">
+          {tool.path}
+        </span>
+      )}
+    </li>
   );
 }
 
@@ -48,7 +100,7 @@ export default function Chat() {
   const { id, cwd, messages } = useLoaderData<typeof loader>();
   const location = useLocation();
   const firstMessage = (location.state as { firstMessage?: string } | null)?.firstMessage;
-  const { turns, busy, connected, error, tools, send } = useAcpStream(
+  const { turns, busy, connected, error, send } = useAcpStream(
     id,
     messages as Turn[]
   );
@@ -76,11 +128,6 @@ export default function Chat() {
               <Bubble key={i} turn={turn} />
             ))}
 
-            {tools.length > 0 && (
-              <div className="text-xs text-text-secondary">
-                Ejecutando: {tools[tools.length - 1]}
-              </div>
-            )}
             {busy && turns[turns.length - 1]?.role === "user" && (
               <div className="flex gap-1">
                 {[0, 1, 2].map((i) => (

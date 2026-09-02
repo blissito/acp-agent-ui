@@ -1,6 +1,6 @@
 # Dónde estamos
 
-> Actualizado el 31 de agosto de 2026. Este archivo es la foto operativa: qué corre, dónde, y qué
+> Actualizado el 2 de septiembre de 2026. Este archivo es la foto operativa: qué corre, dónde, y qué
 > hay que saber para retomar sin releer todo. Lo conceptual va en [`docs/`](docs/).
 
 ## Lo que funciona hoy
@@ -14,7 +14,7 @@ responde en markdown y reporta tokens y costo. Verificado el 31 de agosto con
 | Interfaz | la raíz de este repo | ✅ SSR, 9 rutas |
 | Motor ACP | `app/.server/acp.ts` | ✅ una conexión por conversación |
 | SSE | `app/routes/api.conversations.$id.events.ts` | ✅ con latido cada 25 s |
-| Agente | caja `goose-demo` (`sb_d6a36806-…`), goose 1.48.0 | ✅ `goose-acp.service` |
+| Agente | caja `goose-demo` (`sb_af93745a-…`), goose 1.48.0 | ✅ `goose-acp.service` |
 | Repo | [blissito/acp-agent-ui](https://github.com/blissito/acp-agent-ui) | público |
 
 ## Para arrancar
@@ -24,12 +24,26 @@ npm install
 npm run dev        # necesita .env
 ```
 
-El `.env` (fuera del repo) lleva `ACP_WS_URL`, `ACP_SECRET`, `ACP_CWD` y `AGENT_BOX_ID`. Si se
-pierde, [`scripts/install-goose-unit.mjs`](scripts/install-goose-unit.mjs) reinstala la unidad en la
-caja, rota el secreto y reescribe el archivo. Necesita `EASYBITS_API_KEY` y `AGENT_BOX_ID` en el
-entorno.
+El `.env` (fuera del repo) lleva `ACP_WS_URL`, `ACP_SECRET`, `ACP_CWD`, `AGENT_BOX_ID` y
+`EASYBITS_API_KEY`. **Sin la llave la app funciona pero no gestiona la caja** (el log dice
+"sin SDK"); `@easybits.cloud/sdk` ya es dependencia.
+
+Si la caja muere, [`scripts/new-goose-box.mjs`](scripts/new-goose-box.mjs) levanta otra de cero
+en ~25 s (crear, instalar goose, LLM = EasyBits, `/data/work`, unidad, expose) y reescribe el
+`.env`. Sólo necesita `EASYBITS_API_KEY` en el entorno. Pasó el 2 sep: la primera `goose-demo`
+desapareció del host sin aviso (404 "sandbox not found") mientras figuraba `running`.
 
 ## Lo que hay que saber
+
+- **Las herramientas y el pensamiento se ven.** `tool_call` / `tool_call_update` llegan al
+  navegador como evento `tool` (upsert por id) y `agent_thought_chunk` como `thought`; el chat
+  pinta el pensamiento colapsado y una fila por herramienta con su estado. Hecho el 2 sep para la
+  sesión 2.
+- **`terminal: false` en `initialize`.** Con `true` goose pide `terminal/create` al cliente y,
+  como no lo implementamos, cada `shell` termina en `failed`. El shell corre en la caja.
+- **`POST /extend` da 500 en una caja con TTL vencido** (viva por la siesta): el host suma sobre
+  el `expiresAt` viejo y rechaza con 400, y EasyBits lo convierte en 500. Arreglos en rama en
+  `sandbox-host` y `easybits`, pendientes de desplegar.
 
 - **La caja se suspende sola** al quedar inactiva. La despierta el propio `Upgrade` del WebSocket
   (verificado el 1 sep 2026); `ensureAgentBox` sólo extiende el TTL, suspende al ocio y avisa si la
