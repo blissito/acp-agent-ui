@@ -1,7 +1,7 @@
 /**
  * Servidor Express — SSR de React Router en producción.
  *
- *   npm run build && PORT=4000 node server.js
+ *   npm run build && node server.js
  *
  * En desarrollo no se usa: `npm run dev` levanta Vite con su propio middleware.
  */
@@ -10,7 +10,7 @@ import compression from "compression";
 import express from "express";
 import morgan from "morgan";
 
-const PORT = Number(process.env.PORT ?? 4000);
+const PORT = Number(process.env.PORT ?? 3000);
 const app = express();
 
 app.use(compression());
