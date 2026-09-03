@@ -12,11 +12,20 @@ import { createWebSocketStream } from "@agentclientprotocol/sdk/experimental/ws-
 import { WebSocket } from "ws";
 import type { ConnectPhase } from "~/hooks/useAcpStream";
 
-const WS_URL =
-  process.env.ACP_WS_URL ??
-  "wss://sb-48f0a5d0-53d9-419e-bc1d-f1ac90e3d0da-3000.sandboxes.easybits.cloud/acp";
-const SECRET = process.env.ACP_SECRET ?? ""; // GOOSE_SERVER__SECRET_KEY del agente
-const CWD = process.env.ACP_CWD ?? "/root";
+// Sin URL no se inventa una: un fallback hardcodeado manda la sesión a la caja de otro y el
+// fallo se ve como "el agente no responde" en vez de "te falta configurar esto".
+const WS_URL = process.env.ACP_WS_URL ?? "";
+
+// El token del agente REMOTO. `ACP_SECRET` se acepta como alias porque es el nombre que ya
+// está en los .env de la gente.
+//
+// 🔴 NO es el `GOOSE_SERVER__SECRET_KEY` de la caja, como decía este archivo: ése es un
+// secreto interno que se genera en cada arranque y nunca sale de la microVM. El de aquí es el
+// token del agente — su `embedToken`, o el `ACP_AGENT_TOKEN` que le pusieran al crearlo.
+const TOKEN = process.env.ACP_TOKEN ?? process.env.ACP_SECRET ?? "";
+
+// `/data/work` es lo que existe en una caja ghosty-lite y lo único que sobrevive al sueño.
+const CWD = process.env.ACP_CWD ?? "/data/work";
 const MAX_CONVERSATIONS = Number(process.env.MAX_CONVERSATIONS ?? 10);
 const IDLE_MS = Number(process.env.ACP_IDLE_MS ?? 15 * 60 * 1000);
 
@@ -24,9 +33,11 @@ const IDLE_MS = Number(process.env.ACP_IDLE_MS ?? 15 * 60 * 1000);
 // Ciclo de vida de la caja del agente (app-owned): se despierta al hablarle y
 // se suspende al quedar inactiva.
 // ---------------------------------------------------------------------------
-const AGENT_BOX = process.env.AGENT_BOX_ID ?? "sb_d6a36806-455e-4113-b54a-093bfdb91ca8";
-const AGENT_SNAPSHOT =
-  process.env.AGENT_SNAPSHOT_ID ?? "snap_9f31ad94-09d4-4f93-9439-f43b38825937";
+// Opcionales, y sin fallback por la misma razón que WS_URL: apuntaban a una caja y un snapshot
+// concretos, así que un .env a medias operaba recursos ajenos. Sin ellos esto es un cliente ACP
+// normal y el ciclo de vida simplemente no corre.
+const AGENT_BOX = process.env.AGENT_BOX_ID ?? "";
+const AGENT_SNAPSHOT = process.env.AGENT_SNAPSHOT_ID ?? "";
 const EB_KEY =
   process.env.EASYBITS_API_KEY ??
   (() => {
@@ -53,7 +64,13 @@ async function getEbClient() {
   return ebClient;
 }
 
+/**
+ * Despierta la caja del agente ANTES de conectar. Es específico de EasyBits y OPCIONAL: sin
+ * `EASYBITS_API_KEY` + `AGENT_BOX_ID` esto no corre y el cliente funciona igual contra
+ * cualquier agente ACP — sólo que sin despertarlo él (el agente tiene que estar ya arriba).
+ */
 export async function ensureAgentBox() {
+  if (!AGENT_BOX) return null; // cliente ACP genérico: no hay caja que gestionar
   const eb = await getEbClient();
   if (!eb) {
     console.warn("[lifecycle] sin SDK — no gestiono ciclo de vida");
@@ -76,14 +93,26 @@ export async function ensureAgentBox() {
   } catch {
     // caja perdida → self-heal desde snapshot
   }
+  // El self-heal desde snapshot creaba una caja NUEVA —con URL nueva— y acto seguido se
+  // conectaba a la ACP_WS_URL vieja, así que nunca pudo funcionar: una recuperación que miente
+  // es peor que ninguna. Sólo se intenta si hay snapshot configurado, y se avisa de que la URL
+  // hay que cambiarla a mano.
+  if (!AGENT_SNAPSHOT) {
+    throw new Error(
+      "El agente no despertó y no hay AGENT_SNAPSHOT_ID para recrearlo. Levántalo de nuevo y actualiza ACP_WS_URL."
+    );
+  }
   console.warn("[lifecycle] caja perdida; self-heal desde snapshot");
   const [child] = await eb.sandboxes.forkFromSnapshot(AGENT_SNAPSHOT, {});
   await child.waitUntilReady(90_000);
-  console.log("[lifecycle] caja recreada desde snapshot");
+  console.warn(
+    `[lifecycle] caja recreada (${child.id}) — ⚠️ su URL es otra: actualiza ACP_WS_URL o seguirás hablando con la anterior`
+  );
   return child;
 }
 
 async function suspendAgentBox() {
+  if (!AGENT_BOX) return;
   const eb = await getEbClient();
   if (!eb) return;
   try {
@@ -178,10 +207,24 @@ class GooseSession extends EventEmitter {
 
   async connect() {
     try {
+      // Sin URL no se intenta nada: el error dice qué falta, en vez de dejar al usuario
+      // mirando un spinner y luego un timeout genérico.
+      if (!this.wsUrl) {
+        throw new Error(
+          "Falta ACP_WS_URL. Es el `agentUrl` del agente (wss://…/acp); ponlo en el .env."
+        );
+      }
       this.setPhase("waking");
-      await ensureAgentBox().catch((e) =>
-        console.warn("[lifecycle] ensureAgentBox:", e.message)
-      );
+      // El fallo de ciclo de vida SÍ se cuenta: antes iba sólo a console.warn y la UI pintaba
+      // "Despertando la caja" en verde aunque no se hubiera despertado nada, así que el
+      // siguiente error parecía venir de otro sitio.
+      await ensureAgentBox().catch((e) => {
+        console.warn("[lifecycle] ensureAgentBox:", e.message);
+        this.emit("event", {
+          type: "warning",
+          message: `No pude despertar la caja (${e.message}). Sigo: puede que ya esté arriba.`,
+        });
+      });
       this.setPhase("connecting");
       let timer: NodeJS.Timeout | null = null;
       const timeout = new Promise<never>((_, reject) => {
@@ -189,7 +232,7 @@ class GooseSession extends EventEmitter {
           () =>
             reject(
               new Error(
-                `El agente no respondió en ${Math.round(CONNECT_TIMEOUT_MS / 1000)}s. Revisa que la caja esté viva y que ACP_SECRET sea el de esa caja.`
+                `El agente no respondió en ${Math.round(CONNECT_TIMEOUT_MS / 1000)}s. Revisa que el agente esté vivo y que ACP_WS_URL sea el suyo.`
               )
             ),
           CONNECT_TIMEOUT_MS
@@ -202,17 +245,29 @@ class GooseSession extends EventEmitter {
       const raw = (e as Error).message;
       // "Unexpected server response: 401" no le dice nada a quien lo ve.
       this.lastError = /\b401\b/.test(raw)
-        ? "La caja rechazó la conexión (401): ACP_SECRET no es el GOOSE_SERVER__SECRET_KEY de esa caja."
+        ? "El agente rechazó la conexión (401): el token no es el suyo. Es el `embedToken` que devolvió al crearlo — salvo que le hayas puesto un `ACP_AGENT_TOKEN` propio en el `env`, y entonces es ése."
         : /\b(404|502|503)\b/.test(raw)
-          ? `La caja no está sirviendo el agente (${raw}). ¿Está viva y con goose escuchando en :3000?`
+          ? `Esa URL no está sirviendo un agente (${raw}). Comprueba ACP_WS_URL: la da el propio agente en su campo agentUrl.`
           : raw;
       this.emit("event", { type: "error", message: this.lastError });
     }
   }
 
   private async handshake() {
-    const headers = this.secret ? { "X-Secret-Key": this.secret } : undefined;
-    const stream = createWebSocketStream(this.wsUrl, { WebSocket, headers } as any);
+    // El token va por las DOS vías que acepta un agente ACP, y por eso funciona con cualquiera:
+    //   · `?token=` en la URL — lo único que todo cliente sabe pasar (un WebSocket de navegador
+    //     no puede poner cabeceras), y lo que espera ghosty-lite.
+    //   · `Authorization: Bearer` — lo correcto cuando el cliente es Node, como éste.
+    // Antes iba por `X-Secret-Key`, que el front de la caja DESCARTA: 401 garantizado, con un
+    // mensaje que además culpaba al secreto interno de goose. Medido: ?token= → 200,
+    // X-Secret-Key con el mismo valor → 401.
+    // Si la URL ya trae el token, se respeta: quien la copió entera del panel no se queda fuera.
+    const target = new URL(this.wsUrl);
+    if (this.secret && !target.searchParams.has("token")) {
+      target.searchParams.set("token", this.secret);
+    }
+    const headers = this.secret ? { Authorization: `Bearer ${this.secret}` } : undefined;
+    const stream = createWebSocketStream(target.toString(), { WebSocket, headers } as any);
 
     // El handler de permisos se registra ANTES de conectar.
     const app = client({ name: "acp-web3" } as any);
@@ -373,7 +428,7 @@ export async function createConversation() {
   // La caja se despierta DENTRO de connect(): así el navegador aterriza en la
   // conversación al instante y ve las fases, en vez de esperar el POST a ciegas.
   const id = randomUUID();
-  const s = new GooseSession(WS_URL, SECRET, CWD);
+  const s = new GooseSession(WS_URL, TOKEN, CWD);
   void s.connect();
   conversations.set(id, s);
   s.on("event", (e: AcpEvent) => {

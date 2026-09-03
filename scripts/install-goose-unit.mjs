@@ -1,3 +1,8 @@
+// ⚠️ OBSOLETO (2026-09-03): esto instala `goose serve` a mano en una caja y genera un .env con
+// ACP_SECRET=<GOOSE_SERVER__SECRET_KEY>. Ése ya NO es el modelo: un agente ACP de EasyBits se
+// crea con POST /api/v2/agents y su credencial es el token del AGENTE (embedToken o el
+// ACP_AGENT_TOKEN que le pongas), que viaja por ?token= / Authorization: Bearer.
+// Se conserva por si alguien monta goose por su cuenta.
 import { readFileSync, writeFileSync } from "node:fs";
 import { randomBytes } from "node:crypto";
 

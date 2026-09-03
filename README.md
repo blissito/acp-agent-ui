@@ -48,20 +48,25 @@ cp .env.example .env      # y llénalo
 npm run dev               # http://localhost:5173
 ```
 
-El `.env` lleva cuatro variables:
+Dos variables bastan:
 
 ```sh
-ACP_WS_URL=wss://sb-<id>-3000.sandboxes.easybits.cloud/acp   # la URL de expose, con wss://
-ACP_SECRET=<GOOSE_SERVER__SECRET_KEY de la caja>
-ACP_CWD=/root                                                # dónde abre sus sesiones el agente
-AGENT_BOX_ID=sb_<id>
+ACP_WS_URL=wss://acp-<agentId>.sandboxes.easybits.cloud/acp   # el `agentUrl` del agente
+ACP_TOKEN=<el token del agente>                               # su embedToken, o el ACP_AGENT_TOKEN que le pusieras
 ```
 
-**Llénalas las cuatro.** Si dejas una vacía, `app/.server/acp.ts` cae a su valor
-por defecto —que apunta a otra caja— y el síntoma es un 401 que parece de
-credenciales. `AGENT_BOX_ID` se usa para extender el TTL de la caja, suspenderla
-al ocio y avisar con claridad si ya no existe. Despertarla no hace falta: el
-propio `Upgrade` del WebSocket la despierta (verificado el 1 sep 2026).
+El token viaja como `?token=` en la URL **y** como `Authorization: Bearer`, que son las dos
+formas que acepta un agente ACP — por eso esto sirve con cualquier proveedor, no sólo con
+EasyBits. Si tu agente no pide credencial, deja `ACP_TOKEN` vacío.
+
+⚠️ El token **no** es el `GOOSE_SERVER__SECRET_KEY` de la caja. Ése es un secreto interno que se
+genera en cada arranque y nunca sale de la microVM; mandarlo daba un 401 que parecía de
+credenciales y mandaba a buscar el secreto equivocado.
+
+Lo demás es opcional: `ACP_CWD` (por defecto `/data/work`), y `AGENT_BOX_ID` +
+`EASYBITS_API_KEY` para que la app gestione el ciclo de vida de la caja (despertarla al hablarle,
+suspenderla al ocio). Sin esas dos últimas la app funciona igual, pero el agente tiene que estar
+ya arriba.
 
 Producción:
 

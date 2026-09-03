@@ -218,6 +218,10 @@ Requiere Node ≥ 22.22 (React Router lo avisa; con 22.16 funciona pero se queja
 - Una cookie de tema preexistente ya no rompe la hidratación.
 - El cajón de navegación abre, tapa con velo y cierra al navegar.
 - WSS: `initialize` OK con `X-Secret-Key`, **401 sin él** (la auth no quedó abierta).
+  > ⚠️ **Obsoleto desde 2026-09-03.** Esto valía para el montaje de entonces: `goose serve` a
+  > mano en una caja, autenticando con su `GOOSE_SERVER__SECRET_KEY`. Un agente ACP de EasyBits
+  > (`ghosty-lite`) va detrás de un front que **descarta** `X-Secret-Key` y valida el token del
+  > agente por `?token=` o `Authorization: Bearer`. Medido: `X-Secret-Key` → 401, `?token=` → 200.
 - **Turno real**: el prompt llegó al agente, creó `/root/web3-ok.txt` con `WEB3_OK` en el disco de
   su caja, respondió "listo", y llegaron `usage` (5,017 tokens, $0.0004) y `end_turn`.
 
