@@ -97,7 +97,14 @@ function ToolRow({ tool }: { tool: ToolEntry }) {
   );
 }
 
+// Cada conversación necesita su propio estado: sin la key, React reusa la
+// instancia al navegar entre /c/:id y el hilo anterior se queda pegado.
 export default function Chat() {
+  const { id } = useLoaderData<typeof loader>();
+  return <ChatView key={id} />;
+}
+
+function ChatView() {
   const { id, cwd, messages } = useLoaderData<typeof loader>();
   const location = useLocation();
   const firstMessage = (location.state as { firstMessage?: string } | null)?.firstMessage;
