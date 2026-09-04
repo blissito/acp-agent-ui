@@ -10,6 +10,23 @@ import { ChatInputCard } from "~/components/ChatInputCard";
 import { ChatInput } from "~/components/ChatInput";
 import { Markdown } from "~/components/Markdown";
 import { MessageUsageStats } from "~/components/MessageUsageStats";
+import {
+  Braces,
+  CircleCheck,
+  CircleX,
+  Clock,
+  Code,
+  FilePenLine,
+  FileText,
+  Folder,
+  Globe,
+  ListChecks,
+  Loader2,
+  Search,
+  Terminal,
+  Wrench,
+  type LucideIcon,
+} from "lucide-react";
 import { ConnectingState } from "~/components/ConnectingState";
 import { useAcpStream, type ToolEntry, type Turn } from "~/hooks/useAcpStream";
 import { config, getConversation, getMessages } from "~/.server/acp";
@@ -23,7 +40,11 @@ export async function loader({ params }: Route.LoaderArgs) {
     id: params.id,
     cwd: config.cwd,
     title: conversation.title,
-    messages: getMessages(params.id).map((m) => ({ role: m.role, text: m.text })),
+    messages: getMessages(params.id).map((m) => ({
+      role: m.role,
+      text: m.text,
+      images: m.images,
+    })),
   };
 }
 
@@ -32,6 +53,18 @@ function Bubble({ turn }: { turn: Turn }) {
     return (
       <div className="flex justify-end">
         <div className="max-w-[80%] rounded-2xl rounded-br-md bg-background-inverse px-4 py-2.5 text-sm text-text-inverse">
+          {turn.images && turn.images.length > 0 && (
+            <div className="mb-2 flex flex-wrap justify-end gap-1.5">
+              {turn.images.map((im, i) => (
+                <img
+                  key={i}
+                  src={`data:${im.mimeType};base64,${im.data}`}
+                  alt=""
+                  className="h-20 w-20 rounded-lg object-cover"
+                />
+              ))}
+            </div>
+          )}
           {turn.text}
         </div>
       </div>
@@ -62,37 +95,68 @@ function Bubble({ turn }: { turn: Turn }) {
 
 // Una herramienta del agente, con su estado según ACP:
 // pending → in_progress → completed | failed.
-const STATUS_ICON: Record<string, string> = {
-  pending: "⏳",
-  in_progress: "●",
-  completed: "✓",
-  failed: "✗",
+const STATUS: Record<string, { Icon: LucideIcon; className: string; label: string }> = {
+  pending: { Icon: Clock, className: "text-text-tertiary", label: "Pendiente" },
+  in_progress: { Icon: Loader2, className: "animate-spin text-text-info", label: "Ejecutando" },
+  completed: { Icon: CircleCheck, className: "text-text-success", label: "Lista" },
+  failed: { Icon: CircleX, className: "text-text-danger", label: "Falló" },
+};
+
+// Un icono por tipo de herramienta; lo desconocido cae en la llave inglesa.
+const KIND_ICON: Record<string, LucideIcon> = {
+  bash: Terminal,
+  shell: Terminal,
+  terminal: Terminal,
+  read: FileText,
+  read_file: FileText,
+  write: FilePenLine,
+  write_file: FilePenLine,
+  edit: FilePenLine,
+  edit_file: FilePenLine,
+  grep: Search,
+  glob: Search,
+  search: Search,
+  web_search: Globe,
+  web_fetch: Globe,
+  browser: Globe,
+  todo: ListChecks,
+  list: ListChecks,
+  code: Code,
+  script: Code,
+  folder: Folder,
+  mcp: Braces,
 };
 
 function ToolRow({ tool }: { tool: ToolEntry }) {
   const status = tool.status ?? "pending";
-  const color =
-    status === "failed"
-      ? "text-text-danger"
-      : status === "completed"
-        ? "text-text-success"
-        : "text-text-warning";
+  const s = STATUS[status] ?? STATUS.pending;
+  const StatusIcon = s.Icon;
+  const KindIcon = tool.kind ? (KIND_ICON[tool.kind] ?? Wrench) : Wrench;
   return (
-    <li className="flex min-w-0 items-baseline gap-2 text-xs">
-      <span className={`shrink-0 ${color}`} aria-label={status}>
-        {STATUS_ICON[status] ?? "•"}
+    <li className="flex items-start gap-2.5 rounded-lg border border-border-secondary bg-background-secondary/50 px-3 py-2 transition-colors hover:border-border-primary hover:bg-background-secondary">
+      <span className="mt-px flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-background-primary text-text-secondary shadow-sm">
+        <KindIcon className="h-3.5 w-3.5" />
       </span>
-      {tool.kind && (
-        <span className="shrink-0 rounded bg-background-secondary px-1 font-mono text-text-secondary">
-          {tool.kind}
+      <span className="min-w-0 flex-1">
+        <span className="flex items-baseline gap-2">
+          {tool.kind && (
+            <span className="shrink-0 font-mono text-[10px] font-medium tracking-wide text-text-tertiary uppercase">
+              {tool.kind}
+            </span>
+          )}
+          <span className="min-w-0 truncate text-xs font-medium text-text-primary">
+            {tool.title ?? tool.id}
+          </span>
         </span>
-      )}
-      <span className="min-w-0 truncate text-text-primary">{tool.title ?? tool.id}</span>
-      {tool.path && (
-        <span className="hidden min-w-0 truncate font-mono text-text-tertiary sm:inline">
-          {tool.path}
-        </span>
-      )}
+        {tool.path && (
+          <span className="mt-0.5 block truncate font-mono text-[10px] text-text-tertiary">
+            {tool.path}
+          </span>
+        )}
+      </span>
+      <span className="mt-0.5 shrink-0" title={s.label} aria-label={s.label}>
+        <StatusIcon className={`h-3.5 w-3.5 ${s.className}`} />
+      </span>
     </li>
   );
 }
@@ -108,7 +172,7 @@ function ChatView() {
   const { id, cwd, messages } = useLoaderData<typeof loader>();
   const location = useLocation();
   const firstMessage = (location.state as { firstMessage?: string } | null)?.firstMessage;
-  const { turns, busy, connected, phase, error, send } = useAcpStream(
+  const { turns, busy, connected, phase, error, notice, send, models, currentModel, setModel } = useAcpStream(
     id,
     messages as Turn[]
   );
@@ -150,6 +214,9 @@ function ChatView() {
                 ))}
               </div>
             )}
+            {notice && (
+              <p className="text-sm text-text-tertiary">{notice}</p>
+            )}
             {error && (connected || turns.length > 0) && (
               <p className="text-sm text-text-danger">{error}</p>
             )}
@@ -163,6 +230,10 @@ function ChatView() {
               onSubmit={send}
               busy={busy}
               workingDir={cwd}
+              withImages
+              models={models}
+              currentModel={currentModel}
+              onModelChange={setModel}
               placeholder={connected ? "Sigue la conversación…" : "Conectando con el agente…"}
             />
           </ChatInputCard>

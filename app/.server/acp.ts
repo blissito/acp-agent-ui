@@ -10,7 +10,7 @@ import { readFileSync } from "node:fs";
 import { client } from "@agentclientprotocol/sdk";
 import { createWebSocketStream } from "@agentclientprotocol/sdk/experimental/ws-client";
 import { WebSocket } from "ws";
-import type { ConnectPhase } from "~/hooks/useAcpStream";
+import type { ConnectPhase, ImagePayload, ModelOption } from "~/hooks/useAcpStream";
 
 // Sin URL no se inventa una: un fallback hardcodeado manda la sesión a la caja de otro y el
 // fallo se ve como "el agente no responde" en vez de "te falta configurar esto".
@@ -143,8 +143,10 @@ export type AcpEvent =
       path?: string;
     }
   | { type: "usage"; used: number; size: number; cost: number }
+  | { type: "models"; options: ModelOption[]; current: string | null }
   | { type: "done"; stopReason: string; usage: unknown }
   | { type: "error"; message: string }
+  | { type: "warning"; message: string }
   // Por dónde va la conexión, para que la UI no diga "Conectando…" a secas
   // durante los ~15s que tarda despertar una caja dormida.
   | { type: "status"; phase: ConnectPhase }
@@ -158,6 +160,7 @@ const CONNECT_TIMEOUT_MS = Number(process.env.ACP_CONNECT_TIMEOUT_MS ?? 60_000);
 export interface StoredMessage {
   role: "user" | "assistant";
   text: string;
+  images?: ImagePayload[];
   at: number;
 }
 
@@ -174,16 +177,20 @@ class GooseSession extends EventEmitter {
   cost = 0;
   tokens = 0;
   contextSize = 0;
+  models: ModelOption[] = [];
+  currentModel: string | null = null;
   title = "Nueva conversación";
   createdAt = Date.now();
   updatedAt = Date.now();
   messages: StoredMessage[] = [];
 
+  private started = false;
   private conn: any = null;
   private session: any = null;
-  private queue: string[] = [];
+  private queue: { text: string; images?: ImagePayload[] }[] = [];
   private idleTimer: NodeJS.Timeout | null = null;
   private current: string | null = null;
+  private modelConfigId: string | null = null;
 
   constructor(
     private wsUrl: string,
@@ -206,6 +213,11 @@ class GooseSession extends EventEmitter {
   }
 
   async connect() {
+    // Idempotente: la sesión precalentada ya está conectando cuando la adopta
+    // una conversación, y un segundo handshake abriría un socket de más contra
+    // una caja que cuenta sesiones.
+    if (this.started) return;
+    this.started = true;
     try {
       // Sin URL no se intenta nada: el error dice qué falta, en vez de dejar al usuario
       // mirando un spinner y luego un timeout genérico.
@@ -285,6 +297,19 @@ class GooseSession extends EventEmitter {
       return { outcome: { outcome: "selected", optionId } };
     });
 
+    // El agente refresca su inventario de modelos EN SEGUNDO PLANO después de
+    // `session/new` (goose lo hace si la caché tiene más de 24 h), y anuncia la
+    // lista nueva con un `config_option_update`. Sin escucharlo aquí, un modelo
+    // recién publicado no aparece hasta reiniciar la conversación: el selector
+    // enseñaba una foto vieja. El router del SDK deja pasar la notificación
+    // (`Handled.no`), así que esto NO le roba updates al turno en vuelo.
+    app.onNotification("session/update", ({ params }: any) => {
+      const u = params?.update ?? {};
+      if (u.sessionUpdate === "config_option_update") {
+        this.applyModelOptions(u.configOptions);
+      }
+    });
+
     this.conn = app.connect(stream);
     const ctx = this.conn.agent;
 
@@ -302,30 +327,116 @@ class GooseSession extends EventEmitter {
     this.session = await ctx.buildSession({ cwd: this.cwd, mcpServers: [] }).start();
     this.sessionId = this.session.sessionId;
     this.ready = true;
+    this.applyModelOptions(this.session.newSessionResponse?.configOptions);
     this.emit("event", { type: "started", sessionId: this.sessionId });
     this.resetIdle();
     this.pump();
   }
 
-  ask(text: string) {
+  ask(text: string, images: ImagePayload[] = []) {
     if (this.closed) return;
     this.resetIdle();
-    this.messages.push({ role: "user", text, at: Date.now() });
-    if (this.messages.length === 1) this.title = text.slice(0, 60);
+    this.messages.push({ role: "user", text, images: images.length ? images : undefined, at: Date.now() });
+    if (this.messages.length === 1) this.title = (text || "📷 imagen").slice(0, 60);
     this.updatedAt = Date.now();
-    this.queue.push(text);
+    this.queue.push({ text, images: images.length ? images : undefined });
     this.pump();
+  }
+
+  // El selector de modelo que ACP publica como session config option
+  // (categoría "model", tipo "select"). Aquí se lee y se vuelve a leer
+  // después de cambiarlo, porque el agente responde con la lista actualizada.
+  private applyModelOptions(configs: any[] | null | undefined) {
+    const options = configs ?? this.session?.newSessionResponse?.configOptions ?? [];
+    const model = options.find(
+      (c: any) => c.category === "model" && c.type === "select"
+    );
+    if (!model) return;
+    this.modelConfigId = model.id;
+    this.models = (model.options ?? [])
+      .flatMap((o: any) => (Array.isArray(o.options) ? o.options : [o]))
+      .map((o: any) => ({ value: o.value, name: o.name }));
+    this.currentModel = model.currentValue ?? null;
+    this.emit("event", {
+      type: "models",
+      options: this.models,
+      current: this.currentModel,
+    });
+  }
+
+  async setModel(value: string) {
+    if (!this.ready || !this.sessionId || !this.modelConfigId) return;
+    const res = await this.conn.agent.request("session/set_config_option", {
+      sessionId: this.sessionId,
+      configId: this.modelConfigId,
+      value,
+    });
+    this.applyModelOptions(res?.configOptions);
+  }
+
+  /** ¿Este modelo puede mirar una imagen? Hoy se reconoce por el nombre. */
+  private static seesImages(value: string | null) {
+    return Boolean(value && /vision|vl\b|multimodal/i.test(value));
+  }
+
+  /**
+   * Deja la sesión en un modelo con visión si lo hay. Si el agente no ofrece
+   * ninguno, se avisa y el turno sigue: mejor una respuesta pobre y explicada
+   * que un error mudo.
+   */
+  private async ensureVisionModel() {
+    if (GooseSession.seesImages(this.currentModel)) return;
+    const visual = this.models.find((m) => GooseSession.seesImages(m.value));
+    if (!visual) {
+      this.emit("event", {
+        type: "warning",
+        message:
+          "El modelo actual no ve imágenes y el agente no ofrece ninguno que sí. Va a responder sólo al texto.",
+      });
+      return;
+    }
+    try {
+      await this.setModel(visual.value);
+      this.emit("event", {
+        type: "warning",
+        message: `Cambié a ${visual.name} para poder ver la imagen.`,
+      });
+    } catch (e) {
+      this.emit("event", {
+        type: "warning",
+        message: `No pude cambiar a un modelo con visión (${(e as Error).message}).`,
+      });
+    }
   }
 
   private pump() {
     if (!this.ready || this.busy || this.queue.length === 0) return;
     this.busy = true;
-    this.queue.shift();
+    const item = this.queue.shift()!;
     let turnUsage: unknown = null;
     let answer = "";
 
     (async () => {
-      const promptP = this.session.prompt(this.messages[this.messages.length - 1].text);
+      // Una imagen contra un modelo sin visión no falla de forma legible: el
+      // agente responde como si no la hubiera visto, o corta el turno con un
+      // error del proveedor. Si el turno lleva imágenes y el modelo actual no
+      // ve, se cambia al que sí y se avisa — cambiar en silencio sería peor.
+      if (item.images?.length) await this.ensureVisionModel();
+
+      // Texto y/o imagen(es) como ContentBlocks: un prompt de ACP no es sólo
+      // texto — la imagen viaja base64 en un bloque { type: "image" }.
+      const content: unknown =
+        item.images?.length
+          ? [
+              ...(item.text ? [{ type: "text" as const, text: item.text }] : []),
+              ...item.images.map((im) => ({
+                type: "image" as const,
+                data: im.data,
+                mimeType: im.mimeType,
+              })),
+            ]
+          : item.text;
+      const promptP = this.session.prompt(content);
       while (true) {
         const m = await this.session.nextUpdate();
         if (m.kind === "stop") break;
@@ -352,6 +463,8 @@ class GooseSession extends EventEmitter {
           const path = u.locations?.[0]?.path;
           if (path) ev.path = path;
           this.emit("event", ev);
+        } else if (u.sessionUpdate === "config_option_update") {
+          this.applyModelOptions(u.configOptions);
         } else if (u.sessionUpdate === "usage_update") {
           const used = u.used ?? 0;
           const size = u.size ?? 0;
@@ -421,6 +534,41 @@ const summarize = (id: string, s: GooseSession): ConversationSummary => ({
   closed: s.closed,
 });
 
+// ---------------------------------------------------------------------------
+// Precalentado: el handshake empieza al abrir la app, no al escribir.
+// ---------------------------------------------------------------------------
+// Despertar la caja, abrir el WebSocket y crear la sesión cuesta segundos que
+// hasta ahora se pagaban DESPUÉS del primer mensaje, mirando "Conectando…".
+// `prewarm()` los adelanta al momento en que se carga la interfaz, y la primera
+// conversación adopta esa sesión ya lista.
+//
+// Se guarda UNA sola: la caja tiene un tope de sesiones simultáneas y quedarse
+// con un puñado abiertas "por si acaso" le quita sitio a las conversaciones de
+// verdad. Por eso tampoco se repone sola al adoptarla.
+let warm: GooseSession | null = null;
+
+export function prewarm() {
+  if (!WS_URL || warm) return;
+  const s = new GooseSession(WS_URL, TOKEN, CWD);
+  warm = s;
+  s.on("event", (e: AcpEvent) => {
+    if (e.type === "closed" && warm === s) warm = null;
+  });
+  void s.connect();
+}
+
+/** Toma la sesión precalentada si sirve; si falló, la tira y no la reusa. */
+function takeWarm(): GooseSession | null {
+  const s = warm;
+  if (!s) return null;
+  warm = null;
+  if (s.closed || s.lastError) {
+    s.close();
+    return null;
+  }
+  return s;
+}
+
 export async function createConversation() {
   if (conversations.size >= MAX_CONVERSATIONS) {
     throw new Error("too many conversations");
@@ -428,8 +576,8 @@ export async function createConversation() {
   // La caja se despierta DENTRO de connect(): así el navegador aterriza en la
   // conversación al instante y ve las fases, en vez de esperar el POST a ciegas.
   const id = randomUUID();
-  const s = new GooseSession(WS_URL, TOKEN, CWD);
-  void s.connect();
+  const s = takeWarm() ?? new GooseSession(WS_URL, TOKEN, CWD);
+  void s.connect(); // no-op si la sesión precalentada ya hizo el handshake
   conversations.set(id, s);
   s.on("event", (e: AcpEvent) => {
     if (e.type === "closed" && conversations.get(id) === s) conversations.delete(id);
@@ -459,12 +607,26 @@ export function closeConversation(id: string) {
   return true;
 }
 
-export function askConversation(id: string, text: string) {
+/** Encola un turno; las imágenes van base64 ({ data, mimeType }). */
+export function askConversation(id: string, text: string, images: ImagePayload[] = []) {
   const s = conversations.get(id);
   if (!s) return false;
-  s.ask(text);
+  s.ask(text, images);
   markActivity();
   return true;
+}
+
+/** Cambia el modelo de la sesión; devuelve false si la conversación no existe. */
+export async function setModel(id: string, value: string) {
+  const s = conversations.get(id);
+  if (!s) return false;
+  try {
+    await s.setModel(value);
+    return true;
+  } catch (e) {
+    console.warn("[setModel]", (e as Error).message);
+    return false;
+  }
 }
 
 /** Suscribe a los eventos de una conversación; devuelve la baja. */
@@ -477,6 +639,9 @@ export function subscribe(id: string, onEvent: (e: AcpEvent) => void) {
   // se le repite para que el input no se quede en "Conectando…".
   if (s.ready && s.sessionId && !s.closed) {
     onEvent({ type: "started", sessionId: s.sessionId });
+    if (s.models.length) {
+      onEvent({ type: "models", options: s.models, current: s.currentModel });
+    }
   } else if (!s.closed) {
     onEvent({ type: "status", phase: s.phase });
     if (s.lastError) onEvent({ type: "error", message: s.lastError });
