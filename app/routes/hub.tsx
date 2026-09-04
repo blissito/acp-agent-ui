@@ -25,16 +25,24 @@ function EstadoConexion({
   phase,
   error,
   gone,
+  slots,
   onRetry,
 }: {
   ready: boolean;
   phase: string;
   error: string | null;
   gone: boolean;
+  slots: { live: number; max: number };
   onRetry: () => void;
 }) {
-  const caido = Boolean(error) || gone;
-  const texto = caido
+  // Que no haya sesión precalentada NO es que el agente esté caído: lo normal es
+  // que no quepa, porque la caja atiende un número fijo de conversaciones a la
+  // vez. Pintarlo en rojo con un "Reintentar" que no puede funcionar era mentir.
+  const sinHueco = !ready && !error && slots.live >= slots.max;
+  const caido = Boolean(error) || (gone && !sinHueco);
+  const texto = sinHueco
+    ? `Sin hueco para precalentar (${slots.live} de ${slots.max} conversaciones); la próxima conectará al abrirse`
+    : caido
     ? error ?? "Sin línea con el agente"
     : ready
       ? "Listo"
@@ -52,7 +60,9 @@ function EstadoConexion({
             ? "bg-text-danger"
             : ready
               ? "bg-text-success"
-              : "animate-pulse bg-text-tertiary"
+              : sinHueco
+                ? "bg-text-tertiary"
+                : "animate-pulse bg-text-tertiary"
         )}
       />
       <span className="truncate">{texto}</span>
@@ -148,6 +158,7 @@ export default function Hub({
             phase={warm.phase}
             error={warm.error}
             gone={warm.gone}
+            slots={loaderData.warm.slots}
             onRetry={() => void warm.retry()}
           />
 

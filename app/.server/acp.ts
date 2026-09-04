@@ -555,10 +555,11 @@ let warm: GooseSession | null = null;
 
 export function prewarm() {
   if (!WS_URL || warm) return;
-  // El loader del layout revalida en cada navegación: sin esta guarda, volver al
-  // hub tras adoptar la tibia abría otra y, con tres conversaciones abiertas, la
-  // cuarta ranura de la caja se la quedaba una sesión que nadie está usando.
-  if (conversations.size + 1 >= MAX_LIVE) return;
+  // La tibia ocupa una de las ranuras de la caja, así que sólo se precalienta si
+  // cabe: con el cupo lleno, un socket que nadie está usando le quita el sitio a
+  // una conversación de verdad. El `>` (y no `>=`) es deliberado: con tres
+  // conversaciones abiertas la tibia es justo la cuarta, y sí cabe.
+  if (conversations.size + 1 > MAX_LIVE) return;
   const s = new GooseSession(WS_URL, TOKEN, CWD);
   warm = s;
   s.on("event", (e: AcpEvent) => {
