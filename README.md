@@ -12,14 +12,22 @@ WebSocket.
 [ La caja ]          goose serve · microVM de EasyBits · LLM propio
 ```
 
-El agente escribe en **su** disco, no en el tuyo. Esa es la diferencia con correr goose en la
-laptop, y es la razón de todo lo demás.
+## Las ramas
+
+| Rama | Qué tiene |
+|---|---|
+| `main` | La app al terminar la **sesión 1**: un turno completo contra el agente. Punto de partida. |
+| `sesion-2` | `main` + lo de la **sesión 2**: hub con conversaciones, tarjetas de herramienta y pensamiento, selector de modelo. |
+
+```sh
+git clone https://github.com/blissito/acp-agent-ui
+git switch sesion-2      # o quédate en main para arrancar desde cero
+```
 
 ## El taller
 
-Este repo es el material de **[Sistemas Agénticos](https://www.fixtergeek.com/sistemas-agenticos)**,
-un taller de seis sesiones. Un documento por sesión en [`docs/`](docs/): las dos primeras están
-hechas y verificadas, las otras cuatro son planes con lo que ya se sabe y lo que falta decidir.
+Material de **[Sistemas Agénticos](https://www.fixtergeek.com/sistemas-agenticos)**, seis sesiones,
+un documento por sesión en [`docs/`](docs/).
 
 | | Sesión | Documento | Estado |
 |---|---|---|---|
@@ -30,22 +38,20 @@ hechas y verificadas, las otras cuatro son planes con lo que ya se sabe y lo que
 | 5 | Sólido, corriendo, y con forma de saber si se rompe | [`spec5-operacion.md`](docs/spec5-operacion.md) | plan |
 | 6 | Haciendo lo tuyo: habilidades | [`spec6-habilidades.md`](docs/spec6-habilidades.md) | plan |
 
-La app de la sesión 2 es la que vive en la raíz. Un primer intento de esa interfaz, en SPA, quedó
-en [`legacy/`](legacy/) con su documento.
-
-El estado operativo del día a día —qué corre, qué falta, qué duele— vive en
-[`ESTADO.md`](ESTADO.md).
+El estado operativo del día a día vive en [`ESTADO.md`](ESTADO.md). Un primer intento de la
+interfaz, en SPA, quedó en [`legacy/`](legacy/).
 
 ## Correrlo
 
-Necesitas una caja con `goose serve` escuchando y su secreto. Si no la tienes,
-[`scripts/install-goose-unit.mjs`](scripts/install-goose-unit.mjs) la deja lista (y escribe el
-`.env` por ti).
+Necesitas una caja con `goose serve` escuchando y su secreto;
+[`scripts/install-goose-unit.mjs`](scripts/install-goose-unit.mjs) la deja lista y escribe el
+`.env`.
 
 ```sh
 npm install
 cp .env.example .env      # y llénalo
 npm run dev               # http://localhost:5173
+npm run build && npm start   # producción
 ```
 
 Dos variables bastan:
@@ -55,27 +61,10 @@ ACP_WS_URL=wss://acp-<agentId>.sandboxes.easybits.cloud/acp   # el `agentUrl` de
 ACP_TOKEN=<el token del agente>                               # su embedToken, o el ACP_AGENT_TOKEN que le pusieras
 ```
 
-El token viaja como `?token=` en la URL **y** como `Authorization: Bearer`, que son las dos
-formas que acepta un agente ACP — por eso esto sirve con cualquier proveedor, no sólo con
-EasyBits. Si tu agente no pide credencial, deja `ACP_TOKEN` vacío.
+Opcionales: `ACP_CWD` (por defecto `/data/work`), y `AGENT_BOX_ID` + `EASYBITS_API_KEY` para que la
+app despierte y suspenda la caja sola. Sin esas dos, el agente tiene que estar ya arriba.
 
-⚠️ El token **no** es el `GOOSE_SERVER__SECRET_KEY` de la caja. Ése es un secreto interno que se
-genera en cada arranque y nunca sale de la microVM; mandarlo daba un 401 que parecía de
-credenciales y mandaba a buscar el secreto equivocado.
-
-Lo demás es opcional: `ACP_CWD` (por defecto `/data/work`), y `AGENT_BOX_ID` +
-`EASYBITS_API_KEY` para que la app gestione el ciclo de vida de la caja (despertarla al hablarle,
-suspenderla al ocio). Sin esas dos últimas la app funciona igual, pero el agente tiene que estar
-ya arriba.
-
-Producción:
-
-```sh
-npm run build && npm start
-```
-
-Node ≥ 22.22. `react-router dev` no lee `.env` por su cuenta, por eso los scripts pasan
-`--env-file`.
+Node ≥ 22.22. `react-router dev` no lee `.env` por su cuenta: los scripts pasan `--env-file`.
 
 ## Cómo está armado
 
@@ -95,11 +84,9 @@ atribución está en [`NOTICE`](NOTICE).
 ## Tres cosas que cuestan una tarde si no te las cuentan
 
 - **`goose serve` escucha en `127.0.0.1:3284`.** El proxy del sandbox llega a la IP de la microVM,
-  no a su loopback: sin `--host 0.0.0.0` no lo alcanza. Exponer el puerto correcto no basta. Desde
-  el 31 ago 2026 `expose` lo avisa con un `warning` en la respuesta; antes era un 502 sin
-  explicación.
-- **El tema no puede vivir en `localStorage` con SSR.** Un script que marca la clase antes de
+  no a su loopback: sin `--host 0.0.0.0` no lo alcanza.
+- **El token no es el `GOOSE_SERVER__SECRET_KEY` de la caja.** Ése es interno, se regenera en cada
+  arranque y nunca sale de la microVM; mandarlo da un 401 que parece de credenciales.
+- **El tema no puede vivir en `localStorage` con SSR.** El script que marca la clase antes de
   hidratar desajusta el HTML del servidor y React tira la página — y sólo le pasa a quien ya eligió
-  un tema, así que en la primera visita todo se ve bien.
-- **`printf '%s' 'CLAVE=valor\n'` deja la barra-ene literal** pegada al valor. El agente compara
-  contra un secreto con basura al final y responde 401 aunque el tuyo sea correcto.
+  tema, así que en la primera visita todo se ve bien.
