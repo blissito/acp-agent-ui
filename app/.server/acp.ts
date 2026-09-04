@@ -27,6 +27,12 @@ const TOKEN = process.env.ACP_TOKEN ?? process.env.ACP_SECRET ?? "";
 // `/data/work` es lo que existe en una caja ghosty-lite y lo único que sobrevive al sueño.
 const CWD = process.env.ACP_CWD ?? "/data/work";
 const MAX_CONVERSATIONS = Number(process.env.MAX_CONVERSATIONS ?? 10);
+
+// El tope que manda no es éste sino el de la CAJA: el agente rechaza la quinta
+// conexión con "esta caja ya atiende 4 conversaciones a la vez". La sesión
+// precalentada ocupa una, así que precalentar sin mirar el cupo le robaba el
+// hueco a una conversación de verdad.
+const MAX_LIVE = Number(process.env.ACP_MAX_LIVE_SESSIONS ?? 4);
 const IDLE_MS = Number(process.env.ACP_IDLE_MS ?? 15 * 60 * 1000);
 
 // ---------------------------------------------------------------------------
@@ -549,12 +555,107 @@ let warm: GooseSession | null = null;
 
 export function prewarm() {
   if (!WS_URL || warm) return;
+  // El loader del layout revalida en cada navegación: sin esta guarda, volver al
+  // hub tras adoptar la tibia abría otra y, con tres conversaciones abiertas, la
+  // cuarta ranura de la caja se la quedaba una sesión que nadie está usando.
+  if (conversations.size + 1 >= MAX_LIVE) return;
   const s = new GooseSession(WS_URL, TOKEN, CWD);
   warm = s;
   s.on("event", (e: AcpEvent) => {
     if (e.type === "closed" && warm === s) warm = null;
   });
   void s.connect();
+}
+
+// La elección del usuario sobrevive a que la tibia muera o llegue tarde: es una
+// preferencia del humano, no un atributo de la conexión.
+let preferredModel: string | null = null;
+
+/** Lo que el hub necesita saber de la sesión tibia antes de que exista un chat. */
+export interface WarmState {
+  configured: boolean;
+  present: boolean;
+  ready: boolean;
+  phase: ConnectPhase;
+  error: string | null;
+  models: ModelOption[];
+  currentModel: string | null;
+  slots: { live: number; max: number };
+}
+
+export function warmState(): WarmState {
+  return {
+    configured: Boolean(WS_URL),
+    present: Boolean(warm && !warm.closed),
+    ready: Boolean(warm?.ready),
+    phase: warm?.phase ?? "waking",
+    error: warm?.lastError ?? null,
+    models: warm?.models ?? [],
+    currentModel: warm?.currentModel ?? preferredModel,
+    slots: { live: conversations.size, max: MAX_LIVE },
+  };
+}
+
+/**
+ * Suscribe a los eventos de la tibia. Es el hermano reducido de `subscribe()`:
+ * en una sesión sin turnos sólo circulan fases, modelos y errores. Devuelve
+ * null si no hay tibia, para que el hub distinga "no hay" de "ruta rota".
+ *
+ * A diferencia del SSE del chat, NO toca `openSse()`: ese contador existe para
+ * no dormir la caja mientras alguien lee una conversación, y una pestaña del hub
+ * olvidada la mantendría despierta —y facturando— para siempre.
+ */
+export function subscribeWarm(onEvent: (e: AcpEvent) => void) {
+  const s = warm;
+  if (!s) return null;
+  const handler = (e: AcpEvent) => onEvent(e);
+  s.on("event", handler);
+  if (s.ready && !s.closed) {
+    onEvent({ type: "started", sessionId: s.sessionId ?? "" });
+    if (s.models.length) {
+      onEvent({ type: "models", options: s.models, current: s.currentModel });
+    }
+  } else if (!s.closed) {
+    onEvent({ type: "status", phase: s.phase });
+    if (s.lastError) onEvent({ type: "error", message: s.lastError });
+  }
+  return () => s.off("event", handler);
+}
+
+/**
+ * Cambia el modelo desde el hub, antes de que exista conversación. Se guarda
+ * SIEMPRE como preferencia —aunque la tibia aún no esté lista o no exista—
+ * porque el usuario ya expresó lo que quiere y perderlo por una carrera con el
+ * handshake es peor que aplicarlo tarde.
+ */
+export async function setWarmModel(value: string) {
+  preferredModel = value;
+  if (!warm || !warm.ready || warm.closed) return false;
+  try {
+    await warm.setModel(value);
+    return true;
+  } catch (e) {
+    console.warn("[setWarmModel]", (e as Error).message);
+    return false;
+  }
+}
+
+/** Deja la sesión en el modelo preferido, ya sea ahora o cuando esté lista. */
+function applyPreferredModel(s: GooseSession) {
+  const wanted = preferredModel;
+  if (!wanted) return;
+  const apply = () => {
+    if (s.currentModel === wanted) return;
+    void s.setModel(wanted).catch(() => {});
+  };
+  // `ensureVisionModel()` puede pisar esto en un turno con imágenes: es
+  // deliberado — ver la imagen importa más que respetar la preferencia.
+  if (s.ready) apply();
+  else s.on("event", function once(e: AcpEvent) {
+    if (e.type !== "started") return;
+    s.off("event", once);
+    apply();
+  });
 }
 
 /** Toma la sesión precalentada si sirve; si falló, la tira y no la reusa. */
@@ -573,11 +674,17 @@ export async function createConversation() {
   if (conversations.size >= MAX_CONVERSATIONS) {
     throw new Error("too many conversations");
   }
+  if (conversations.size >= MAX_LIVE) {
+    throw new Error(
+      `La caja no atiende más de ${MAX_LIVE} conversaciones a la vez. Cierra una para abrir otra.`
+    );
+  }
   // La caja se despierta DENTRO de connect(): así el navegador aterriza en la
   // conversación al instante y ve las fases, en vez de esperar el POST a ciegas.
   const id = randomUUID();
   const s = takeWarm() ?? new GooseSession(WS_URL, TOKEN, CWD);
   void s.connect(); // no-op si la sesión precalentada ya hizo el handshake
+  applyPreferredModel(s);
   conversations.set(id, s);
   s.on("event", (e: AcpEvent) => {
     if (e.type === "closed" && conversations.get(id) === s) conversations.delete(id);

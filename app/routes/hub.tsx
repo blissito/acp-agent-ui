@@ -7,10 +7,66 @@ import { useNavigate } from "react-router";
 import { MainPanelLayout } from "~/components/Layout/MainPanelLayout";
 import { ChatInputCard } from "~/components/ChatInputCard";
 import { ChatInput } from "~/components/ChatInput";
-import { config } from "~/.server/acp";
+import { cn } from "~/lib/utils";
+import { config, warmState } from "~/.server/acp";
+import { useWarmStream, type WarmSeed } from "~/hooks/useWarmStream";
+import type { ImagePayload } from "~/hooks/useAcpStream";
 
 export async function loader() {
-  return { cwd: config.cwd, wsUrl: config.wsUrl };
+  // El estado de la sesión precalentada viaja en el HTML: si el handshake ya
+  // terminó (lo normal a la segunda visita), el selector aparece pintado desde
+  // el primer frame en vez de aparecer medio segundo después.
+  return { cwd: config.cwd, wsUrl: config.wsUrl, warm: warmState() };
+}
+
+/** El estado de la línea con el agente, en una frase y un punto de color. */
+function EstadoConexion({
+  ready,
+  phase,
+  error,
+  gone,
+  onRetry,
+}: {
+  ready: boolean;
+  phase: string;
+  error: string | null;
+  gone: boolean;
+  onRetry: () => void;
+}) {
+  const caido = Boolean(error) || gone;
+  const texto = caido
+    ? error ?? "Sin línea con el agente"
+    : ready
+      ? "Listo"
+      : phase === "waking"
+        ? "Despertando la caja…"
+        : phase === "connecting"
+          ? "Conectando…"
+          : "Abriendo la sesión…";
+  return (
+    <div className="mb-2 flex items-center gap-2 text-xs text-text-tertiary">
+      <span
+        className={cn(
+          "h-1.5 w-1.5 shrink-0 rounded-full",
+          caido
+            ? "bg-text-danger"
+            : ready
+              ? "bg-text-success"
+              : "animate-pulse bg-text-tertiary"
+        )}
+      />
+      <span className="truncate">{texto}</span>
+      {caido && (
+        <button
+          type="button"
+          onClick={onRetry}
+          className="shrink-0 underline underline-offset-2 transition-colors hover:text-text-primary"
+        >
+          Reintentar
+        </button>
+      )}
+    </div>
+  );
 }
 
 function useClock() {
@@ -32,11 +88,16 @@ function useClock() {
   };
 }
 
-export default function Hub({ loaderData }: { loaderData: { cwd: string } }) {
+export default function Hub({
+  loaderData,
+}: {
+  loaderData: { cwd: string; warm: WarmSeed };
+}) {
   const navigate = useNavigate();
   const clock = useClock();
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const warm = useWarmStream(loaderData.warm);
 
   const greeting = !clock
     ? ""
@@ -46,15 +107,22 @@ export default function Hub({ loaderData }: { loaderData: { cwd: string } }) {
         ? "Buenas tardes"
         : "Buenas noches";
 
-  const handleSubmit = async (text: string) => {
+  const handleSubmit = async (text: string, images: ImagePayload[] = []) => {
     if (creating) return;
     setCreating(true);
     setError(null);
     try {
-      const res = await fetch("/api/conversations", { method: "POST" });
+      // El turno viaja EN la creación: así la conversación nace con su primer
+      // mensaje puesto y el chat lo pinta al primer render, sin depender de que
+      // el navegador cargue una ruta para reenviarlo.
+      const res = await fetch("/api/conversations", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ text, images }),
+      });
       const body = await res.json();
       if (!res.ok) throw new Error(body.error ?? "no se pudo abrir la conversación");
-      navigate(`/c/${body.conversationId}`, { state: { firstMessage: text } });
+      navigate(`/c/${body.conversationId}`);
     } catch (e) {
       setError((e as Error).message);
       setCreating(false);
@@ -75,20 +143,30 @@ export default function Hub({ loaderData }: { loaderData: { cwd: string } }) {
           </div>
           <p className="mb-6 text-xl text-text-secondary">{greeting}</p>
 
+          <EstadoConexion
+            ready={warm.ready}
+            phase={warm.phase}
+            error={warm.error}
+            gone={warm.gone}
+            onRetry={() => void warm.retry()}
+          />
+
           <ChatInputCard>
             <ChatInput
               onSubmit={handleSubmit}
               busy={creating}
               workingDir={loaderData.cwd}
+              withImages
+              models={warm.models}
+              currentModel={warm.currentModel}
+              onModelChange={(v) => void warm.setModel(v)}
               placeholder="Pídele algo al agente que vive en la caja…"
             />
           </ChatInputCard>
 
           {error && <p className="mt-3 text-sm text-text-danger">{error}</p>}
           {creating && (
-            <p className="mt-3 text-sm text-text-secondary">
-              Despertando la caja del agente…
-            </p>
+            <p className="mt-3 text-sm text-text-secondary">Abriendo la conversación…</p>
           )}
         </div>
       </div>

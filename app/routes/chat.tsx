@@ -3,7 +3,7 @@
  * recargas), y de ahí en adelante el hilo lo alimenta el SSE.
  */
 import { useEffect, useRef } from "react";
-import { useLocation, useLoaderData } from "react-router";
+import { useLoaderData } from "react-router";
 import type { Route } from "./+types/chat";
 import { MainPanelLayout } from "~/components/Layout/MainPanelLayout";
 import { ChatInputCard } from "~/components/ChatInputCard";
@@ -170,22 +170,15 @@ export default function Chat() {
 
 function ChatView() {
   const { id, cwd, messages } = useLoaderData<typeof loader>();
-  const location = useLocation();
-  const firstMessage = (location.state as { firstMessage?: string } | null)?.firstMessage;
   const { turns, busy, connected, phase, error, notice, send, models, currentModel, setModel } = useAcpStream(
     id,
     messages as Turn[]
   );
-  const sentFirst = useRef(false);
   const bottom = useRef<HTMLDivElement>(null);
 
-  // El primer mensaje viene del Hub; se manda una sola vez y en cuanto el
-  // agente terminó de conectarse.
-  useEffect(() => {
-    if (!firstMessage || sentFirst.current || !connected) return;
-    sentFirst.current = true;
-    void send(firstMessage);
-  }, [firstMessage, connected, send]);
+  // El primer mensaje ya no se reenvía desde aquí: el hub lo manda en el mismo
+  // POST que crea la conversación, así que llega al loader como un mensaje más
+  // y se pinta en el primer render. De paso, ya no hay forma de duplicarlo.
 
   useEffect(() => {
     bottom.current?.scrollIntoView({ behavior: "smooth" });

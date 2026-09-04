@@ -11,6 +11,9 @@ export default [
   route("api/conversations/:id/events", "routes/api.conversations.$id.events.ts"),
   route("api/conversations/:id/messages", "routes/api.conversations.$id.messages.ts"),
   route("api/conversations/:id/model", "routes/api.conversations.$id.model.ts"),
+  route("api/prewarm", "routes/api.prewarm.ts"),
+  route("api/prewarm/events", "routes/api.prewarm.events.ts"),
+  route("api/prewarm/model", "routes/api.prewarm.model.ts"),
 
   layout("routes/_shell.tsx", [
     index("routes/hub.tsx"),
