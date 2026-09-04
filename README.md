@@ -43,9 +43,16 @@ interfaz, en SPA, quedó en [`legacy/`](legacy/).
 
 ## Correrlo
 
-Necesitas una caja con `goose serve` escuchando y su secreto;
-[`scripts/install-goose-unit.mjs`](scripts/install-goose-unit.mjs) la deja lista y escribe el
-`.env`.
+Del otro lado hace falta un agente que hable ACP. Dos caminos:
+
+- **[Ghosty Lite](https://www.easybits.cloud/docs#ghosty-lite)** — el atajo. Un agente en Rust que
+  ya habla ACP nativo, corre en su microVM con `/data` persistente y usa tu llave de EasyBits como
+  cerebro (sin credenciales de OpenAI ni Anthropic aparte). Se crea con un `POST /api/v2/agents` y
+  `template: "ghosty-lite"`; cuando queda `running`, su `agentUrl` y su `embedToken` son las dos
+  variables de abajo. Duerme a las 2 h de ocio y despierta en ~1 s con el disco intacto.
+- **goose en una caja tuya** — el camino largo, el de la sesión 1.
+  [`scripts/install-goose-unit.mjs`](scripts/install-goose-unit.mjs) la deja lista y escribe el
+  `.env`.
 
 ```sh
 npm install
@@ -58,7 +65,7 @@ Dos variables bastan:
 
 ```sh
 ACP_WS_URL=wss://acp-<agentId>.sandboxes.easybits.cloud/acp   # el `agentUrl` del agente
-ACP_TOKEN=<el token del agente>                               # su embedToken, o el ACP_AGENT_TOKEN que le pusieras
+ACP_TOKEN=<el token del agente>                               # el `embedToken` de Ghosty Lite, o el ACP_AGENT_TOKEN que le pusieras a goose
 ```
 
 Opcionales: `ACP_CWD` (por defecto `/data/work`), y `AGENT_BOX_ID` + `EASYBITS_API_KEY` para que la
