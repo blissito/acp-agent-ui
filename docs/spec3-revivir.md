@@ -250,6 +250,41 @@ Y una trampa que no es del protocolo: una caja recién creada puede traer el age
 proveedor de modelo**. Acepta la sesión y revienta con `Internal error` al primer turno. Se ve en
 `/etc/<agente>-runtime/.env` vacío, no en el Cliente.
 
+## Subirlo: las llaves no entran a la caja
+
+El respaldo se sube a la cuenta de EasyBits del propio alumno, y el reparto es el que enseña el
+tutorial de memoria procedural: *lo que necesita llave pasa por una tool*.
+
+```
+respaldar:   POST /api/v2/files            →  putUrl firmado + fileId
+             exec en la caja:  python3 .backup  +  curl -T "<putUrl>"
+
+restaurar:   GET /api/v2/files/:fileId     →  readUrl
+             exec en la caja nueva:  curl -o /data/state/goose/sessions/sessions.db
+```
+
+Quien tiene la llave es el script, que corre fuera. La caja recibe una URL **ya firmada** y ni sabe
+ni necesita saber la credencial. Scripts: `scripts/backup-sessions.mjs` y
+`scripts/restore-sessions.mjs`.
+
+Detalles que hay que saber:
+
+- La caja de goose **no trae** `aws`, `rclone`, `sqlite3` ni `boto3`. Sí `curl`, `python3`, `node` y
+  `openssl`: el `.backup` se hace con `python3` (`con.backup(dst)`).
+- `POST /files` responde `{ file: { id, … }, putUrl }` y el archivo ya nace en `status: DONE`;
+  `GET /files/:id` devuelve la descarga en **`readUrl`**, no en `url` (que viene vacío).
+- **El `fileId` es parte del respaldo.** Sin ese dato el archivo existe y no se encuentra.
+- Al restaurar se para el agente antes de tocarle la base debajo de los pies, y se verifica
+  **contando filas**: un 200 no dice que el archivo sirva.
+- Por defecto no se pisa una base que ya esté en la caja; para eso está `--force`.
+
+Probado de punta a punta: caja con dos hilos → respaldo (90 KB) → `DELETE` de la caja → caja nueva →
+restaurar → la app lista los dos hilos con sus títulos.
+
+Y para la pregunta de "¿y en producción?": `sandbox-host` ya hace esto a escala de flota, con restic
+contra un bucket aparte (`internal/api/backup_offsite.go`) y `VACUUM INTO` para el SQLite
+(`backup_sqld.go`). Lo que se construye en clase es la versión que se entiende de una sentada.
+
 ## Lo que falta decidir
 
 - **A S3, ¿qué y cómo?** Para el taller: el archivo entero (`.backup` + `PutObject`, y al arrancar
