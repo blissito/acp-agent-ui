@@ -227,6 +227,58 @@ function conTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
   ]);
 }
 
+/**
+ * Una sesión reanudada, hablada a pelo.
+ *
+ * El SDK sólo entrega su `ActiveSession` —la del `prompt()` y el `nextUpdate()`—
+ * cuando la sesión nace de un `session/new`. Un hilo que se reabre con
+ * `session/load` no pasa por ahí, así que se le pone delante este adaptador con
+ * la misma forma: los `session/update` que llegan por notificación se encolan, y
+ * `prompt` es la petición cruda.
+ */
+class SesionCruda {
+  private cola: any[] = [];
+  private esperando: ((m: any) => void) | null = null;
+
+  constructor(
+    private conn: any,
+    public readonly sessionId: string,
+  ) {}
+
+  /** Le entrega un update al turno en curso (o lo guarda hasta que lo pidan). */
+  push(m: any) {
+    const w = this.esperando;
+    if (w) {
+      this.esperando = null;
+      w(m);
+    } else {
+      this.cola.push(m);
+    }
+  }
+
+  prompt(content: unknown) {
+    const bloques =
+      typeof content === "string" ? [{ type: "text", text: content }] : content;
+    return Promise.resolve(
+      this.conn.agent.request("session/prompt", {
+        sessionId: this.sessionId,
+        prompt: bloques,
+      }),
+    ).finally(() => this.push({ kind: "stop" }));
+  }
+
+  nextUpdate(): Promise<any> {
+    const ya = this.cola.shift();
+    if (ya) return Promise.resolve(ya);
+    return new Promise((res) => (this.esperando = res));
+  }
+
+  dispose() {
+    this.cola = [];
+    this.esperando = null;
+  }
+}
+
 // ---------------------------------------------------------------------------
 // GooseSession — una conexión ACP por conversación.
 // ---------------------------------------------------------------------------
@@ -379,6 +431,11 @@ class GooseSession extends EventEmitter {
       // Durante el replay estos chunks son el historial, no un turno en vivo:
       // se guardan como mensajes en vez de emitirse al navegador.
       if (this.replaying && applyReplayChunk(this.messages, u)) return;
+      // En un hilo reanudado el turno vive de estas notificaciones: el SDK no
+      // las está enrutando por nosotros.
+      if (!this.replaying && this.session instanceof SesionCruda) {
+        this.session.push({ kind: "session_update", update: u });
+      }
       if (u.sessionUpdate === "config_option_update") {
         this.applyModelOptions(u.configOptions);
       } else if (u.sessionUpdate === "session_info_update" && u.title) {
@@ -420,7 +477,7 @@ class GooseSession extends EventEmitter {
       });
       this.replaying = false;
       this.sessionId = this.resumeSessionId;
-      this.session = { sessionId: this.resumeSessionId } as any;
+      this.session = new SesionCruda(this.conn, this.resumeSessionId) as any;
       // El agente guarda "New Chat" y NO deja renombrar: sus capacidades son
       // list, delete y close, sin rename (`session/rename` responde "Method not
       // found"). Así que el título bueno se deriva del primer mensaje y se
