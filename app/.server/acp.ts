@@ -1225,7 +1225,10 @@ export async function listHistory(): Promise<ConversationSummary[]> {
       id: `acp:${s.sessionId}`,
       title: titles[s.sessionId] || s.title || "Sin título",
       createdAt: Date.parse(s._meta?.createdAt ?? s.updatedAt),
-      updatedAt: Date.parse(s.updatedAt),
+      // El `updatedAt` del agente se mueve cada vez que alguien ABRE el hilo:
+      // ordenar por él hace que la lista baile sola con sólo pasear por el
+      // historial. Lo que importa es cuándo se habló.
+      updatedAt: Date.parse(s._meta?.lastMessageAt ?? s.updatedAt),
       messageCount: s._meta?.messageCount ?? 0,
       tokens: 0,
       contextSize: 0,

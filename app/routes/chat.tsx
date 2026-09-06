@@ -71,6 +71,11 @@ export async function loader({ params }: Route.LoaderArgs) {
   if (!conversation) {
     throw new Response("Esa conversación ya no existe", { status: 404 });
   }
+  // La conexión murió (idle, reinicio del agente) pero el hilo sigue en la
+  // caja: se lee desde ahí en vez de enseñar un socket muerto con su error.
+  if (conversation.closed && conversation.sessionId) {
+    throw redirect(`/c/acp:${conversation.sessionId}`);
+  }
   return {
     id: params.id,
     readOnly: false,

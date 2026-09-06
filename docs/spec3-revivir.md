@@ -188,6 +188,12 @@ Detalles que muerden:
 - **`close()` tiene que despedirse.** Cerrar el WebSocket no le dice nada al agente: la sesión sigue
   contando. Sin un `session/close` explícito, un reinicio del Cliente deja ranuras fantasma y a la
   cuarta la caja rechaza todo hasta que se reinicia el agente.
+- **Leer un hilo lo "toca".** `session/load` mueve el `updatedAt` del agente, así que ordenar la
+  lista por ese campo la hace bailar sola con sólo pasear por el historial. Lo que importa es cuándo
+  se habló: `_meta.lastMessageAt`.
+- **Una conversación muerta no es un 404.** Si su conexión cayó (idle, reinicio del agente) el hilo
+  sigue en la caja: se cae a modo lectura en vez de enseñar un socket muerto con su error — y desde
+  ahí se reabre escribiendo, como cualquier otro.
 - **Una carga a la vez en la lectora.** El `session/update` del replay no dice de qué hilo viene:
   dos cargas simultáneas mezclarían las dos conversaciones.
 - **Las imágenes viajan aparte.** En el replay llegan como `content.type === "image"` con su base64;
