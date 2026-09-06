@@ -285,16 +285,18 @@ Y para la pregunta de "¿y en producción?": `sandbox-host` ya hace esto a escal
 contra un bucket aparte (`internal/api/backup_offsite.go`) y `VACUUM INTO` para el SQLite
 (`backup_sqld.go`). Lo que se construye en clase es la versión que se entiende de una sentada.
 
-## Lo que falta decidir
-
-- **A S3, ¿qué y cómo?** Para el taller: el archivo entero (`.backup` + `PutObject`, y al arrancar
-  bajarlo sólo si no existe local). Un json por hilo es más barato y no choca entre cajas, pero
-  obliga a reconstruir la base al recrear; se menciona, no se construye.
-- **S3 no se lee para pintar la pantalla.** Va atrás de la realidad. Se lee una sola vez, al
-  arrancar una caja nueva; la pantalla siempre pregunta al agente.
+## Lo que falta
 
 - **Qué pasa con un turno interrumpido.** Es la pregunta de la sesión y hay que responderla con la
   prueba, no con la doc.
 - **`session/cancel`.** El botón de parar está dibujado y no interrumpe; toca aquí.
 - **Si la caja se suspende a media tarea.** La despierta el propio `Upgrade` del WebSocket al
-  reconectar (verificado el 1 sep 2026), pero el turno en vuelo ya murió con la suspensión.
+  reconectar, pero el turno en vuelo murió con la suspensión.
+- **Replay parcial.** goose acepta `_meta.replayTail` en `session/load`: replica sólo la cola del
+  hilo, cortando en frontera de turno para no partir un par tool-request/response. Hoy el
+  `session/load` completo tarda ~1.1 s; en un hilo muy largo, esto es la salida.
+
+Decidido y ya construido, para que no se vuelva a discutir: se sube **el archivo entero**, no un
+json por hilo (más barato, pero obliga a reconstruir la base al recrear la caja). Y **S3 no se lee
+para pintar la pantalla**: va atrás de la realidad, se lee una sola vez al levantar una caja nueva;
+la pantalla siempre le pregunta al agente.
