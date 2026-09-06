@@ -823,6 +823,29 @@ export function invalidateRead(sessionId: string) {
 // ---------------------------------------------------------------------------
 const conversations = new Map<string, GooseSession>();
 
+// Qué hilo del agente había detrás de una conversación que ya se cerró. Una
+// pestaña abierta desde antes sigue pidiendo su id local: con esto se la manda
+// a leer el hilo, en vez de darle un 404 por algo que sí existe en la caja.
+// Se guarda en disco porque el caso típico es justo el reinicio del server.
+const SEPULTADAS_PATH = process.env.ACP_THREADS_PATH ?? ".data/sepultadas.json";
+let sepultadas: Record<string, string> = {};
+try {
+  sepultadas = JSON.parse(readFileSync(SEPULTADAS_PATH, "utf8"));
+} catch {
+  // primera vez
+}
+
+function enterrar(id: string, sessionId: string) {
+  if (sepultadas[id] === sessionId) return;
+  sepultadas[id] = sessionId;
+  try {
+    mkdirSync(dirname(SEPULTADAS_PATH), { recursive: true });
+    writeFileSync(SEPULTADAS_PATH, JSON.stringify(sepultadas, null, 2));
+  } catch {}
+}
+
+export const sessionIdSepultado = (id: string) => sepultadas[id] ?? null;
+
 export interface ConversationSummary {
   id: string;
   sessionId?: string | null;
@@ -1000,7 +1023,10 @@ export async function createConversation(resumeSessionId?: string) {
   applyPreferredModel(s);
   conversations.set(id, s);
   s.on("event", (e: AcpEvent) => {
-    if (e.type === "closed" && conversations.get(id) === s) conversations.delete(id);
+    if (e.type === "closed" && conversations.get(id) === s) {
+      if (s.sessionId) enterrar(id, s.sessionId);
+      conversations.delete(id);
+    }
   });
   return id;
 }
@@ -1031,7 +1057,10 @@ export async function promoteConversation(sessionId: string, tituloDelAgente?: s
   s.titleFromAgent = tituloDelAgente ?? null;
   conversations.set(id, s);
   s.on("event", (e: AcpEvent) => {
-    if (e.type === "closed" && conversations.get(id) === s) conversations.delete(id);
+    if (e.type === "closed" && conversations.get(id) === s) {
+      if (s.sessionId) enterrar(id, s.sessionId);
+      conversations.delete(id);
+    }
   });
   await s.connect();
   // `connect()` no relanza: emite el error y sigue. Sin esto devolveríamos el
@@ -1147,6 +1176,9 @@ let despidiendose = false;
 async function cerrarTodo() {
   if (despidiendose) return;
   despidiendose = true;
+  // Antes de soltar el registro, apuntar qué hilo tenía cada conversación: al
+  // volver, sus pestañas abiertas siguen pidiendo el id viejo.
+  for (const [id, s] of conversations) if (s.sessionId) enterrar(id, s.sessionId);
   const todas = [...conversations.values(), ...(warm ? [warm] : [])];
   conversations.clear();
   warm = null;

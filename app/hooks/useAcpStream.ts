@@ -48,6 +48,8 @@ export interface AcpStreamOpts {
   /** Al escribir en un hilo de sólo lectura, el server abre una conversación
    *  de verdad y aquí llega su id nuevo. */
   onPromoted?: (conversationId: string) => void;
+  /** La conexión murió: el hilo sigue en la caja y se puede seguir leyendo. */
+  onDisconnected?: () => void;
 }
 
 export function useAcpStream(
@@ -141,10 +143,13 @@ export function useAcpStream(
     es.addEventListener("closed", () => {
       setConnected(false);
       es.close();
+      // El socket murió, no el hilo: quien mira esta página tiene que poder
+      // seguir leyéndolo y reabrirlo, no quedarse con un error rojo.
+      opts.onDisconnected?.();
     });
 
     return () => es.close();
-  }, [conversationId, opts.readOnly]);
+  }, [conversationId, opts.readOnly, opts.onDisconnected]);
 
   const send = useCallback(
     async (text: string, images: ImagePayload[] = []) => {

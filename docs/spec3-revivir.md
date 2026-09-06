@@ -193,7 +193,10 @@ Detalles que muerden:
   se habló: `_meta.lastMessageAt`.
 - **Una conversación muerta no es un 404.** Si su conexión cayó (idle, reinicio del agente) el hilo
   sigue en la caja: se cae a modo lectura en vez de enseñar un socket muerto con su error — y desde
-  ahí se reabre escribiendo, como cualquier otro.
+  ahí se reabre escribiendo, como cualquier otro. Vale para los tres momentos: al cargar la página,
+  cuando el SSE avisa del cierre, y al volver a una URL vieja después de reiniciar el servidor
+  (para eso hay que **apuntar en disco qué hilo tenía cada conversación**, porque el registro en
+  memoria se va con el proceso).
 - **Una carga a la vez en la lectora.** El `session/update` del replay no dice de qué hilo viene:
   dos cargas simultáneas mezclarían las dos conversaciones.
 - **Las imágenes viajan aparte.** En el replay llegan como `content.type === "image"` con su base64;

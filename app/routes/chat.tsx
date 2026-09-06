@@ -29,7 +29,14 @@ import {
 } from "lucide-react";
 import { ConnectingState } from "~/components/ConnectingState";
 import { useAcpStream, type ToolEntry, type Turn } from "~/hooks/useAcpStream";
-import { config, findLocalBySessionId, getConversation, getMessages, readThread } from "~/.server/acp";
+import {
+  config,
+  findLocalBySessionId,
+  getConversation,
+  getMessages,
+  readThread,
+  sessionIdSepultado,
+} from "~/.server/acp";
 
 const plano = (m: { role: "user" | "assistant"; text: string; images?: any[] }) => ({
   role: m.role,
@@ -49,6 +56,7 @@ export async function loader({ params }: Route.LoaderArgs) {
       const hilo = await readThread(sessionId);
       return {
         id: params.id,
+        sessionId,
         readOnly: true,
         cwd: config.cwd,
         title: hilo.title,
@@ -59,6 +67,7 @@ export async function loader({ params }: Route.LoaderArgs) {
       // Un hilo que ya no está no debe tumbar la página con un 500.
       return {
         id: params.id,
+        sessionId,
         readOnly: true,
         cwd: config.cwd,
         title: "Hilo no disponible",
@@ -69,6 +78,10 @@ export async function loader({ params }: Route.LoaderArgs) {
   }
   const conversation = getConversation(params.id);
   if (!conversation) {
+    // La conversación se cerró, pero su hilo sigue en la caja: se lee desde
+    // ahí. Sólo es un 404 de verdad si nunca supimos de ella.
+    const enterrada = sessionIdSepultado(params.id);
+    if (enterrada) throw redirect(`/c/acp:${enterrada}`);
     throw new Response("Esa conversación ya no existe", { status: 404 });
   }
   // La conexión murió (idle, reinicio del agente) pero el hilo sigue en la
@@ -78,6 +91,7 @@ export async function loader({ params }: Route.LoaderArgs) {
   }
   return {
     id: params.id,
+    sessionId: conversation.sessionId ?? null,
     readOnly: false,
     cwd: config.cwd,
     title: conversation.title,
@@ -207,7 +221,7 @@ export default function Chat() {
 }
 
 function ChatView() {
-  const { id, cwd, messages, readOnly, error: loadError } = useLoaderData<typeof loader>();
+  const { id, sessionId, cwd, messages, readOnly, error: loadError } = useLoaderData<typeof loader>();
   const navigate = useNavigate();
   const { turns, busy, connected, phase, error, notice, send, models, currentModel, setModel } = useAcpStream(
     id,
@@ -217,6 +231,11 @@ function ChatView() {
       // Al reabrirlo cambia de identidad: el hilo del agente pasa a ser una
       // conversación de este proceso, con su propia URL.
       onPromoted: (nuevo) => navigate(`/c/${nuevo}`, { replace: true }),
+      // Si la conexión se cae, el hilo no se pierde: se sigue leyendo desde la
+      // caja y se reabre escribiendo.
+      onDisconnected: () => {
+        if (sessionId) navigate(`/c/acp:${sessionId}`, { replace: true });
+      },
     }
   );
   const bottom = useRef<HTMLDivElement>(null);
