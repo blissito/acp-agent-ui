@@ -285,6 +285,48 @@ Y para la pregunta de "¿y en producción?": `sandbox-host` ya hace esto a escal
 contra un bucket aparte (`internal/api/backup_offsite.go`) y `VACUUM INTO` para el SQLite
 (`backup_sqld.go`). Lo que se construye en clase es la versión que se entiende de una sentada.
 
+## La procedimental: no se respalda porque se regenera
+
+Es la otra mitad de "a S3 va lo que no puedes regenerar". Las skills viven en el repo, versionadas,
+y llegan a la caja con un `git clone`. Si la caja muere, no hay nada que restaurar.
+
+**Dónde las busca goose** (verificado poniendo una skill de prueba en cinco sitios y viendo cuáles
+aparecen en `ghosty skills list`):
+
+| ruta | ¿la lee? |
+|---|---|
+| `<cwd>/.goose/skills/<nombre>/SKILL.md` | sí |
+| `<cwd>/.claude/skills/<nombre>/SKILL.md` | sí |
+| `<config>/skills/`, `$HOME/.config/goose/skills/`, `$XDG_DATA_HOME/goose/skills/` | no |
+
+Son **relativas al directorio de trabajo**, que es justo el del repo clonado. Por eso "viaja con el
+código" es literal.
+
+### La demo, en diez segundos
+
+Con una skill que dice "identificadores en inglés, comentarios en español", el mismo prompt da:
+
+```
+con la skill:   export function greet(name: string)     + comentario en español
+sin la skill:   export function despedirse(nombre: string)
+```
+
+Mismo agente, mismo modelo, mismo prompt. Lo único que cambió fue un archivo del repo.
+
+### La trampa: autodescubrible ≠ leída
+
+Está escrita en el propio `.goosehints` de la caja y vale para toda la memoria procedimental:
+
+> Las rutas van EXACTAS a propósito. Ni goose ni ghostycode autodescubren el SDK… Una sugerencia
+> del tipo «lista el directorio y lee el que aplique» se ignora siempre.
+
+Que un archivo esté donde el agente *podría* encontrarlo no significa que lo abra. Lo que se carga
+solo es lo que el agente indexa (las skills, por su `description`) o lo que va en el prompt de
+sistema (`.goosehints`). Todo lo demás hay que nombrarlo por ruta exacta.
+
+Y una más del template: el `.goosehints` **se pisa en cada arranque** desde la copia horneada. Si se
+edita dentro de la caja, se pierde en el siguiente despertar — la copia buena es la del repo.
+
 ## Lo que falta
 
 - **Qué pasa con un turno interrumpido.** Es la pregunta de la sesión y hay que responderla con la
