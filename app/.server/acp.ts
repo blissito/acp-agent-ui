@@ -179,6 +179,8 @@ class GooseSession extends EventEmitter {
   replayCounts: Record<string, number> = {};
   /** Si viene, en vez de abrir un hilo nuevo se reanuda éste (`session/load`). */
   resumeSessionId: string | null = null;
+  /** El nombre que el agente tiene guardado, para no pisarlo si es de verdad. */
+  titleFromAgent: string | null = null;
   private replaying = false;
   busy = false;
   ready = false;
@@ -377,8 +379,15 @@ class GooseSession extends EventEmitter {
       this.replaying = false;
       this.sessionId = this.resumeSessionId;
       this.session = { sessionId: this.resumeSessionId } as any;
-      const primero = this.messages.find((m) => m.role === "user")?.text;
-      if (primero) this.title = primero.slice(0, 60);
+      // El agente guarda "New Chat" y NO deja renombrar: sus capacidades son
+      // list, delete y close, sin rename (`session/rename` responde "Method not
+      // found"). Así que el título bueno se deriva del primer mensaje y se
+      // recuerda de este lado; la lista lo toma de aquí mientras el hilo siga
+      // abierto, y vuelve a "New Chat" al reiniciar el server.
+      const primero = this.messages.find((m) => m.role === "user")?.text?.trim();
+      const generico = !this.titleFromAgent || /^new chat$/i.test(this.titleFromAgent);
+      if (primero && generico) this.title = primero.slice(0, 60);
+      else if (this.titleFromAgent) this.title = this.titleFromAgent;
     } else {
       this.session = await ctx.buildSession({ cwd: this.cwd, mcpServers: [] }).start();
       this.sessionId = this.session.sessionId;
@@ -746,22 +755,38 @@ export async function createConversation() {
   return id;
 }
 
+/** Cierra la conversación inactiva más antigua para hacer sitio. */
+function liberaRanura() {
+  const candidata = [...conversations.entries()]
+    .filter(([, s]) => !s.busy && !s.closed)
+    .sort((a, b) => a[1].updatedAt - b[1].updatedAt)[0];
+  if (!candidata) {
+    throw new Error(
+      `Las ${MAX_LIVE} conversaciones de la caja están ocupadas. Espera a que alguna termine.`,
+    );
+  }
+  const [id, s] = candidata;
+  s.close();
+  conversations.delete(id);
+}
+
 /** Abre una conversación local a partir de un hilo que el agente ya tenía.
  *  Devuelve el id nuevo; los mensajes viejos ya vienen dentro. */
-export async function resumeConversation(sessionId: string) {
+export async function resumeConversation(sessionId: string, tituloDelAgente?: string) {
   const yaAbierta = [...conversations.entries()].find(
     ([, s]) => s.sessionId === sessionId && !s.closed,
   );
   if (yaAbierta) return yaAbierta[0];
 
-  if (conversations.size >= MAX_LIVE) {
-    throw new Error(
-      `La caja no atiende más de ${MAX_LIVE} conversaciones a la vez. Cierra una para abrir otra.`,
-    );
-  }
+  // Leer un hilo viejo cuesta una ranura de la caja, y son cuatro. Antes de
+  // fallar se cierra la conversación inactiva más antigua: el hilo no se pierde
+  // —vive en el agente— y se puede reabrir igual que éste.
+  if (conversations.size >= MAX_LIVE) liberaRanura();
+
   const id = randomUUID();
   const s = new GooseSession(WS_URL, TOKEN, CWD);
   s.resumeSessionId = sessionId;
+  s.titleFromAgent = tituloDelAgente ?? null;
   conversations.set(id, s);
   s.on("event", (e: AcpEvent) => {
     if (e.type === "closed") conversations.delete(id);
