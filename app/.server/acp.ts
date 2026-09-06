@@ -235,10 +235,17 @@ function conTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
 // del agente, no del hilo: se abre una vez y las sesiones van y vienen por
 // dentro. (Es lo que hace Zed: una conexión por agente, multiplexando.)
 // ---------------------------------------------------------------------------
-let conexion: { conn: any; caps: any } | null = null;
-let conectando: Promise<{ conn: any; caps: any }> | null = null;
+let conexion: { conn: any; caps: any; socket?: any } | null = null;
+let conectando: Promise<{ conn: any; caps: any; socket?: any }> | null = null;
+
+/** OPEN según el estándar de WebSocket. */
+const SOCKET_ABIERTO = 1;
 
 async function conexionCompartida() {
+  // Un socket que ya no está abierto no sirve, aunque el objeto siga en pie.
+  if (conexion && conexion.socket && conexion.socket.readyState !== SOCKET_ABIERTO) {
+    conexion = null;
+  }
   if (conexion) return conexion;
   if (conectando) return conectando;
   conectando = (async () => {
@@ -249,7 +256,25 @@ async function conexionCompartida() {
     const target = new URL(WS_URL);
     if (TOKEN && !target.searchParams.has("token")) target.searchParams.set("token", TOKEN);
     const headers = TOKEN ? { Authorization: `Bearer ${TOKEN}` } : undefined;
-    const stream = createWebSocketStream(target.toString(), { WebSocket, headers } as any);
+
+    // El socket queda a la vista para saber si sigue vivo: una caja que se
+    // duerme mata la conexión sin avisar, y reusar esa conexión muerta deja la
+    // pantalla en "Abriendo el canal ACP" con un error que no dice nada.
+    let socket: any = null;
+    class WSVigilado extends WebSocket {
+      constructor(...args: any[]) {
+        // @ts-expect-error el SDK construye con (url, protocols, opciones)
+        super(...args);
+        socket = this;
+        this.on("close", () => {
+          if (conexion?.conn === conn) conexion = null;
+        });
+        this.on("error", () => {
+          if (conexion?.conn === conn) conexion = null;
+        });
+      }
+    }
+    const stream = createWebSocketStream(target.toString(), { WebSocket: WSVigilado, headers } as any);
 
     // Los handlers se registran ANTES de conectar, y hablan con el hilo abierto
     // en ese momento: la conexión sobrevive a las sesiones.
@@ -285,7 +310,7 @@ async function conexionCompartida() {
       }),
       CONNECT_TIMEOUT_MS,
     );
-    conexion = { conn, caps: init?.agentCapabilities ?? null };
+    conexion = { conn, caps: init?.agentCapabilities ?? null, socket };
     console.log("[acp] agentCapabilities:", JSON.stringify(conexion.caps));
     return conexion;
   })().finally(() => {
@@ -798,21 +823,32 @@ export async function abrirHilo(id: string): Promise<GooseSession> {
     await anterior.close();
   }
 
-  const s = new GooseSession(WS_URL, TOKEN, CWD);
-  if (id !== HILO_NUEVO) s.resumeSessionId = id;
-  if (preferredModel) s.modeloPreferido = preferredModel;
-  actual = s;
-  s.on("event", (e: AcpEvent) => {
-    if (e.type === "closed" && actual === s) actual = null;
-  });
-  await s.connect();
-  if (s.lastError) {
-    // `connect()` no relanza: emite el error y sigue. Sin esto devolveríamos
-    // una sesión muerta y la pantalla se quedaría en "Conectando…".
-    throw new Error(s.lastError);
+  // Dos intentos: la caja se duerme sola cuando nadie la usa, y al despertar el
+  // primer socket puede llegar antes que el agente. Reintentar es lo normal
+  // aquí, no una excepción — por eso no se le pide al humano que le dé a un
+  // botón de "Reintentar".
+  let ultimo: Error | null = null;
+  for (let intento = 0; intento < 2; intento++) {
+    const s = new GooseSession(WS_URL, TOKEN, CWD);
+    if (id !== HILO_NUEVO) s.resumeSessionId = id;
+    if (preferredModel) s.modeloPreferido = preferredModel;
+    actual = s;
+    s.on("event", (e: AcpEvent) => {
+      if (e.type === "closed" && actual === s) actual = null;
+    });
+    await s.connect();
+    // `connect()` no relanza: emite el error y sigue. Sin mirar `lastError`
+    // devolveríamos una sesión muerta y la pantalla se quedaría conectando.
+    if (!s.lastError) {
+      invalidarLista();
+      return s;
+    }
+    ultimo = new Error(s.lastError);
+    actual = null;
+    soltarConexion();
+    void s.close();
   }
-  invalidarLista();
-  return s;
+  throw ultimo ?? new Error("no pude abrir el hilo");
 }
 
 /** La sesión abierta, si la hay y sigue viva. */
@@ -1088,7 +1124,15 @@ export const closeSse = () => {
 
 setInterval(() => {
   if (activeSse === 0 && !sesionActual()?.busy && Date.now() - lastActivity > IDLE_MS) {
-    suspendAgentBox().catch(() => {});
+    // Despedirse ANTES de la siesta. Suspender la caja no limpia las sesiones
+    // del lado del agente: quedan contando para siempre, y a las cuatro la caja
+    // rechaza todo hasta que alguien reinicia el agente.
+    void cerrarActual()
+      .catch(() => {})
+      .then(() => {
+        soltarConexion();
+        return suspendAgentBox().catch(() => {});
+      });
     lastActivity = Date.now();
   }
 }, 30_000).unref?.();
