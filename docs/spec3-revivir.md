@@ -160,18 +160,56 @@ Tres cosas que hay que resolver y no son obvias:
    agente. `ConversationSummary` ahora lleva los dos; sin eso no se puede saber si un hilo del
    agente ya está abierto aquí.
 
-Y tres detalles que sólo aparecen al usarlo:
+## Leer no es conversar
 
-- **Leer un hilo viejo cuesta una ranura.** `session/load` monta su propia conexión ACP y la caja
-  atiende cuatro: al tercer hilo, el error. Se cierra la conversación inactiva más antigua —el hilo
-  no se pierde, vive en el agente— pero **nunca una que alguien esté mirando**: cada pestaña deja un
-  listener del SSE, y cerrar una con público le tira la conversación en la cara a quien la lee.
+La caja atiende cuatro sesiones a la vez. Si abrir un hilo para mirarlo monta su propia conexión, el
+historial compite con las conversaciones y al tercer clic se acaba el cupo. Desalojar a la más
+antigua para hacer sitio parece la salida, y es peor: le tira la conversación en la cara a quien la
+está leyendo.
+
+La separación correcta sale de mirar qué dura cuánto:
+
+```
+leer un hilo    →  una conexión lectora:  session/load → replay → session/close
+escribir en él  →  ahí sí, conexión propia y una ranura
+```
+
+`session/close` devuelve la ranura, y **el hilo con mensajes sobrevive**: sigue en `session/list`
+(uno vacío sí desaparece). Con eso, una sola conexión lee hilos indefinidamente. El hilo se
+"promueve" a conversación viva sólo cuando el usuario escribe; si en ese momento no cabe, se dice —
+no se desaloja a nadie.
+
+Consecuencias en el reparto: de las cuatro ranuras, **una se reserva para el servicio** (la conexión
+tibia o la lectora) y tres quedan para conversar. Listar el historial deja de necesitar una
+conversación viva, que era lo que hacía lenta la primera carga.
+
+Detalles que muerden:
+
+- **`close()` tiene que despedirse.** Cerrar el WebSocket no le dice nada al agente: la sesión sigue
+  contando. Sin un `session/close` explícito, un reinicio del Cliente deja ranuras fantasma y a la
+  cuarta la caja rechaza todo hasta que se reinicia el agente.
+- **Una carga a la vez en la lectora.** El `session/update` del replay no dice de qué hilo viene:
+  dos cargas simultáneas mezclarían las dos conversaciones.
 - **Las imágenes viajan aparte.** En el replay llegan como `content.type === "image"` con su base64;
   si sólo se guarda `content.text`, una conversación que empezó con una foto vuelve sin ella.
-- **El título es del Cliente, no del agente.** El agente guarda `New Chat` y **no deja renombrar**:
-  sus capacidades son `list`, `delete` y `close` (`session/rename` responde *Method not found*). El
-  nombre legible se deriva del primer mensaje y se recuerda de este lado; ésa es la pieza de memoria
-  que sí es responsabilidad nuestra, y por lo tanto la que nos toca persistir.
+## El título lo pone el agente
+
+Es el error natural: ver `New Chat` en toda la lista y concluir que el Cliente tiene que inventar
+el nombre. En ACP el título viaja **del agente al Cliente**, en la notificación `session/update` con
+`sessionUpdate: "session_info_update"` y su campo `title`. goose lo genera con un LLM leyendo los
+primeros mensajes del hilo y lo empuja por ahí.
+
+Si la lista dice `New Chat` para siempre, casi seguro el Cliente está tirando esa variante de
+`session/update` sin darse cuenta. Fue exactamente el caso aquí.
+
+- **No existe rename en la spec.** Los métodos de sesión son `new`, `load`, `prompt`, `cancel`,
+  `close`, `list`, `delete`, `resume`, `set_mode`, `set_config_option`. Ninguno fija el título:
+  `session/rename` responde *Method not found*.
+- goose sí trae uno propietario, fuera del estándar: `_goose/unstable/session/rename`.
+- También acepta un nombre desde el arranque: `_meta.client_title` en `session/new`.
+- El Cliente igual guarda el título que recibe, porque `session/list` sólo lo trae si el agente ya
+  lo generó, y porque un renombre del usuario tiene que sobrevivir. Zed hace justo esto: acepta el
+  título del agente y guarda aparte un `title_override` local.
 
 ## Lo que falta decidir
 

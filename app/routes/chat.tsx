@@ -3,7 +3,7 @@
  * recargas), y de ahí en adelante el hilo lo alimenta el SSE.
  */
 import { useEffect, useRef } from "react";
-import { redirect, useLoaderData } from "react-router";
+import { redirect, useLoaderData, useNavigate } from "react-router";
 import type { Route } from "./+types/chat";
 import { MainPanelLayout } from "~/components/Layout/MainPanelLayout";
 import { ChatInputCard } from "~/components/ChatInputCard";
@@ -29,14 +29,43 @@ import {
 } from "lucide-react";
 import { ConnectingState } from "~/components/ConnectingState";
 import { useAcpStream, type ToolEntry, type Turn } from "~/hooks/useAcpStream";
-import { config, getConversation, getMessages, resumeConversation } from "~/.server/acp";
+import { config, findLocalBySessionId, getConversation, getMessages, readThread } from "~/.server/acp";
+
+const plano = (m: { role: "user" | "assistant"; text: string; images?: any[] }) => ({
+  role: m.role,
+  text: m.text,
+  images: m.images,
+});
 
 export async function loader({ params }: Route.LoaderArgs) {
-  // `acp:<sessionId>` es un hilo que vive en el agente y todavía no en este
-  // proceso: se reanuda con `session/load` y se redirige al id local.
+  // `acp:<sessionId>` es un hilo que vive en el agente. Se LEE, no se abre:
+  // montar una conversación para mirarlo le quitaría sitio a las de verdad.
   if (params.id.startsWith("acp:")) {
-    const local = await resumeConversation(params.id.slice(4));
-    throw redirect(`/c/${local}`);
+    const sessionId = params.id.slice(4);
+    // Salvo que ya esté abierto aquí: entonces es esa misma conversación.
+    const local = findLocalBySessionId(sessionId);
+    if (local) throw redirect(`/c/${local}`);
+    try {
+      const hilo = await readThread(sessionId);
+      return {
+        id: params.id,
+        readOnly: true,
+        cwd: config.cwd,
+        title: hilo.title,
+        messages: hilo.messages.map(plano),
+        error: null as string | null,
+      };
+    } catch (e) {
+      // Un hilo que ya no está no debe tumbar la página con un 500.
+      return {
+        id: params.id,
+        readOnly: true,
+        cwd: config.cwd,
+        title: "Hilo no disponible",
+        messages: [],
+        error: (e as Error).message,
+      };
+    }
   }
   const conversation = getConversation(params.id);
   if (!conversation) {
@@ -44,13 +73,11 @@ export async function loader({ params }: Route.LoaderArgs) {
   }
   return {
     id: params.id,
+    readOnly: false,
     cwd: config.cwd,
     title: conversation.title,
-    messages: getMessages(params.id).map((m) => ({
-      role: m.role,
-      text: m.text,
-      images: m.images,
-    })),
+    messages: getMessages(params.id).map(plano),
+    error: null as string | null,
   };
 }
 
@@ -175,10 +202,17 @@ export default function Chat() {
 }
 
 function ChatView() {
-  const { id, cwd, messages } = useLoaderData<typeof loader>();
+  const { id, cwd, messages, readOnly, error: loadError } = useLoaderData<typeof loader>();
+  const navigate = useNavigate();
   const { turns, busy, connected, phase, error, notice, send, models, currentModel, setModel } = useAcpStream(
     id,
-    messages as Turn[]
+    messages as Turn[],
+    {
+      readOnly,
+      // Al reabrirlo cambia de identidad: el hilo del agente pasa a ser una
+      // conversación de este proceso, con su propia URL.
+      onPromoted: (nuevo) => navigate(`/c/${nuevo}`, { replace: true }),
+    }
   );
   const bottom = useRef<HTMLDivElement>(null);
 
@@ -197,6 +231,11 @@ function ChatView() {
           <div className="mx-auto flex w-full max-w-3xl flex-col gap-6 px-4 py-8 sm:px-6">
             {!connected && turns.length === 0 && (
               <ConnectingState phase={phase} error={error} />
+            )}
+            {loadError && (
+              <p className="rounded-xl border border-border-primary px-4 py-3 text-sm text-text-secondary">
+                {loadError}
+              </p>
             )}
             {turns.map((turn, i) => (
               <Bubble key={i} turn={turn} />

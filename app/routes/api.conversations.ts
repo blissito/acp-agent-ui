@@ -16,6 +16,7 @@ export async function action({ request }: Route.ActionArgs) {
   // del navegador porque las imágenes son base64: cuatro adjuntos no caben en
   // `history.state` y el mensaje se perdería sin decir nada.
   const body = (await request.json().catch(() => ({}))) as {
+    resumeSessionId?: string;
     text?: string;
     images?: ImagePayload[];
   };
@@ -31,7 +32,11 @@ export async function action({ request }: Route.ActionArgs) {
       )
     : [];
   try {
-    const id = await createConversation();
+    // Con `resumeSessionId` no se abre un hilo nuevo: se reabre uno que el
+    // agente ya tenía guardado y que hasta ahora sólo se estaba leyendo.
+    const id = await createConversation(
+      typeof body.resumeSessionId === "string" ? body.resumeSessionId : undefined,
+    );
     if (text || images.length) askConversation(id, text, images);
     return data({ conversationId: id });
   } catch (e) {
