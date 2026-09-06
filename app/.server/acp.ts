@@ -1063,6 +1063,51 @@ export async function listHistory(): Promise<ConversationSummary[]> {
   return items.sort((a, b) => b.updatedAt - a.updatedAt);
 }
 
+// ---------------------------------------------------------------------------
+// Skills: la memoria procedimental, vista desde fuera.
+// ---------------------------------------------------------------------------
+// ACP no dice nada de skills —el binario tiene decenas de métodos propios para
+// providers, recetas y horarios, y ninguno para esto—, así que la única fuente
+// honesta es preguntarle a la caja qué ve. Se listan con el CLI del agente, que
+// es exactamente lo que él mismo lee.
+// ---------------------------------------------------------------------------
+
+export interface Skill {
+  name: string;
+  description: string;
+  location: string;
+  /** Cargada de fábrica (`builtin://`) o puesta por nosotros. */
+  builtin: boolean;
+  /** En el directorio de trabajo, es decir: viaja con el repo. */
+  enElRepo: boolean;
+}
+
+export async function listSkills(): Promise<{ skills: Skill[]; error?: string }> {
+  if (!AGENT_BOX) return { skills: [], error: "sin caja que preguntar" };
+  const eb = await getEbClient();
+  if (!eb) return { skills: [], error: "sin SDK de EasyBits" };
+  try {
+    const sb = await eb.sandboxes.get(AGENT_BOX);
+    const bin = CWD.includes("ghosty") || true ? "ghosty" : "goose";
+    const r: any = await sb.exec(`cd ${CWD} && (${bin} skills list 2>/dev/null || goose skills list 2>/dev/null)`);
+    const filas = String(r.stdout ?? "")
+      .split("\n")
+      .map((l) => l.split("|").map((c) => c.trim()))
+      .filter((c) => c.length >= 5 && c[0] && c[0] !== "Name");
+    return {
+      skills: filas.map((c) => ({
+        name: c[0],
+        description: c[1],
+        location: c[4],
+        builtin: c[4].startsWith("builtin://"),
+        enElRepo: c[4].startsWith(CWD),
+      })),
+    };
+  } catch (e) {
+    return { skills: [], error: (e as Error).message };
+  }
+}
+
 export const config = { wsUrl: WS_URL, cwd: CWD, agentBox: AGENT_BOX, idleMs: IDLE_MS };
 
 // ---------------------------------------------------------------------------
