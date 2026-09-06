@@ -173,6 +173,13 @@ una conexión ACP, reutilizada
 abrir un hilo  =  session/close del anterior  +  session/load del nuevo
 ```
 
+**La conexión es del agente, no del hilo.** Abrir el WebSocket y hacer `initialize` cuesta segundos;
+hacerlo en cada cambio de hilo es pagar ese peaje por pasear por el historial. Se abre una vez y las
+sesiones van y vienen por dentro — es lo que hace Zed, que cachea una conexión por agente y
+multiplexa. Medido aquí: cambiar de hilo pasó de 3.2 s a 1.3 s, y 1.25 s de eso es el `session/load`
+del propio agente. (El otro segundo se iba en preguntarle al host si la caja estaba despierta, con
+una conexión viva encima.)
+
 Leer y seguir dejan de ser cosas distintas: abres un hilo, es *el* hilo, y escribes.
 
 **No es una limitación de esta app, es lo que hace la industria.** Cline llama `endActiveSession()`
@@ -200,6 +207,10 @@ así que llevar un índice propio sólo añade algo que desincronizar. Zed y Cod
 —`sidebar_threads`, `state.sqlite`— porque manejan varios agentes y proyectos.
 
 **No va al navegador.** La memoria vive en la caja: ése es justo el asunto de esta sesión.
+
+Pero la pantalla no puede depender de que haya una sesión abierta para pintarla: si lo hace, la
+lista aparece, desaparece y baila según qué esté conectado en ese instante. Se guarda la última
+lista conocida y se refresca por detrás.
 
 ### El selector de modelos
 

@@ -227,6 +227,82 @@ function conTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
   ]);
 }
 
+// ---------------------------------------------------------------------------
+// La conexión: una, y se queda.
+// ---------------------------------------------------------------------------
+// Abrir el WebSocket y hacer `initialize` cuesta unos tres segundos. Hacerlo en
+// cada cambio de hilo es pagar ese peaje por mirar el historial. La conexión es
+// del agente, no del hilo: se abre una vez y las sesiones van y vienen por
+// dentro. (Es lo que hace Zed: una conexión por agente, multiplexando.)
+// ---------------------------------------------------------------------------
+let conexion: { conn: any; caps: any } | null = null;
+let conectando: Promise<{ conn: any; caps: any }> | null = null;
+
+async function conexionCompartida() {
+  if (conexion) return conexion;
+  if (conectando) return conectando;
+  conectando = (async () => {
+    // El token va por las DOS vías que acepta un agente ACP, y por eso funciona
+    // con cualquiera: `?token=` en la URL —lo único que sabe pasar un WebSocket
+    // de navegador, y lo que espera ghosty-lite— y `Authorization: Bearer`, lo
+    // correcto cuando el cliente es Node, como éste.
+    const target = new URL(WS_URL);
+    if (TOKEN && !target.searchParams.has("token")) target.searchParams.set("token", TOKEN);
+    const headers = TOKEN ? { Authorization: `Bearer ${TOKEN}` } : undefined;
+    const stream = createWebSocketStream(target.toString(), { WebSocket, headers } as any);
+
+    // Los handlers se registran ANTES de conectar, y hablan con el hilo abierto
+    // en ese momento: la conexión sobrevive a las sesiones.
+    const app = client({ name: "acp-web3" } as any);
+    app.onRequest("session/request_permission", ({ params }: any) => {
+      const options = params.options ?? [];
+      const allow = options.find((o: any) => o.kind === "allow_once") ?? options[0];
+      const optionId = allow?.optionId ?? options[0]?.optionId;
+      // Se auto-aprueba (tema de la sesión 4), pero la petición se enseña.
+      actual?.emit("event", {
+        type: "tool",
+        id: params.toolCall?.toolCallId ?? "?",
+        title: params.toolCall?.title ?? "herramienta",
+        status: "pending",
+      });
+      return { outcome: { outcome: "selected", optionId } };
+    });
+    app.onNotification("session/update", ({ params }: any) => {
+      actual?.onSessionUpdate(params?.update ?? {});
+    });
+
+    const conn = app.connect(stream);
+    const init: any = await conTimeout(
+      conn.agent.request("initialize", {
+        protocolVersion: 1,
+        clientCapabilities: {
+          fs: { readTextFile: false, writeTextFile: false },
+          // Sin terminal del lado del cliente: el agente corre el shell en su
+          // propia caja. Con true, goose pide terminal/create y, como no lo
+          // implementamos, cada shell termina en failed.
+          terminal: false,
+        },
+      }),
+      CONNECT_TIMEOUT_MS,
+    );
+    conexion = { conn, caps: init?.agentCapabilities ?? null };
+    console.log("[acp] agentCapabilities:", JSON.stringify(conexion.caps));
+    return conexion;
+  })().finally(() => {
+    conectando = null;
+  });
+  return conectando;
+}
+
+/** La conexión murió o hay que renovarla: la próxima sesión abrirá otra. */
+function soltarConexion() {
+  const c = conexion;
+  conexion = null;
+  try {
+    c?.conn?.close?.();
+  } catch {}
+}
+
 /**
  * Una sesión reanudada, hablada a pelo.
  *
@@ -350,6 +426,13 @@ class GooseSession extends EventEmitter {
         );
       }
       this.setPhase("waking");
+      // Con una conexión viva la caja está despierta por definición: preguntarle
+      // al host en cada cambio de hilo es un segundo de peaje por nada.
+      if (conexion) {
+        this.setPhase("connecting");
+        await Promise.race([this.handshake(), this.timeoutDeConexion()]);
+        return;
+      }
       // El fallo de ciclo de vida SÍ se cuenta: antes iba sólo a console.warn y la UI pintaba
       // "Despertando la caja" en verde aunque no se hubiera despertado nada, así que el
       // siguiente error parecía venir de otro sitio.
@@ -361,22 +444,10 @@ class GooseSession extends EventEmitter {
         });
       });
       this.setPhase("connecting");
-      let timer: NodeJS.Timeout | null = null;
-      const timeout = new Promise<never>((_, reject) => {
-        timer = setTimeout(
-          () =>
-            reject(
-              new Error(
-                `El agente no respondió en ${Math.round(CONNECT_TIMEOUT_MS / 1000)}s. Revisa que el agente esté vivo y que ACP_WS_URL sea el suyo.`
-              )
-            ),
-          CONNECT_TIMEOUT_MS
-        );
-        timer.unref?.();
-      });
-      await Promise.race([this.handshake(), timeout]);
-      if (timer) clearTimeout(timer);
+      await Promise.race([this.handshake(), this.timeoutDeConexion()]);
     } catch (e) {
+      // Un handshake roto deja la conexión inservible: la próxima abre otra.
+      soltarConexion();
       const raw = (e as Error).message;
       // "Unexpected server response: 401" no le dice nada a quien lo ve.
       this.lastError = /\b401\b/.test(raw)
@@ -388,84 +459,28 @@ class GooseSession extends EventEmitter {
     }
   }
 
+  private timeoutDeConexion(): Promise<never> {
+    return new Promise<never>((_, reject) => {
+      const t = setTimeout(
+        () =>
+          reject(
+            new Error(
+              `El agente no respondió en ${Math.round(CONNECT_TIMEOUT_MS / 1000)}s. Revisa que el agente esté vivo y que ACP_WS_URL sea el suyo.`
+            )
+          ),
+        CONNECT_TIMEOUT_MS
+      );
+      t.unref?.();
+    });
+  }
+
   private async handshake() {
-    // El token va por las DOS vías que acepta un agente ACP, y por eso funciona con cualquiera:
-    //   · `?token=` en la URL — lo único que todo cliente sabe pasar (un WebSocket de navegador
-    //     no puede poner cabeceras), y lo que espera ghosty-lite.
-    //   · `Authorization: Bearer` — lo correcto cuando el cliente es Node, como éste.
-    // Antes iba por `X-Secret-Key`, que el front de la caja DESCARTA: 401 garantizado, con un
-    // mensaje que además culpaba al secreto interno de goose. Medido: ?token= → 200,
-    // X-Secret-Key con el mismo valor → 401.
-    // Si la URL ya trae el token, se respeta: quien la copió entera del panel no se queda fuera.
-    const target = new URL(this.wsUrl);
-    if (this.secret && !target.searchParams.has("token")) {
-      target.searchParams.set("token", this.secret);
-    }
-    const headers = this.secret ? { Authorization: `Bearer ${this.secret}` } : undefined;
-    const stream = createWebSocketStream(target.toString(), { WebSocket, headers } as any);
+    const { conn, caps } = await conexionCompartida();
+    this.conn = conn;
+    this.agentCapabilities = caps;
 
-    // El handler de permisos se registra ANTES de conectar.
-    const app = client({ name: "acp-web3" } as any);
-    app.onRequest("session/request_permission", ({ params }: any) => {
-      const options = params.options ?? [];
-      const allow = options.find((o: any) => o.kind === "allow_once") ?? options[0];
-      const optionId = allow?.optionId ?? options[0]?.optionId;
-      // Se auto-aprueba (tema de la sesión 4), pero la petición se enseña.
-      this.emit("event", {
-        type: "tool",
-        id: params.toolCall?.toolCallId ?? "?",
-        title: params.toolCall?.title ?? "herramienta",
-        status: "pending",
-      });
-      return { outcome: { outcome: "selected", optionId } };
-    });
-
-    // El agente refresca su inventario de modelos EN SEGUNDO PLANO después de
-    // `session/new` (goose lo hace si la caché tiene más de 24 h), y anuncia la
-    // lista nueva con un `config_option_update`. Sin escucharlo aquí, un modelo
-    // recién publicado no aparece hasta reiniciar la conversación: el selector
-    // enseñaba una foto vieja. El router del SDK deja pasar la notificación
-    // (`Handled.no`), así que esto NO le roba updates al turno en vuelo.
-    app.onNotification("session/update", ({ params }: any) => {
-      const u = params?.update ?? {};
-      // Durante el replay estos chunks son el historial, no un turno en vivo:
-      // se guardan como mensajes en vez de emitirse al navegador.
-      if (this.replaying && applyReplayChunk(this.messages, u)) return;
-      // En un hilo reanudado el turno vive de estas notificaciones: el SDK no
-      // las está enrutando por nosotros.
-      if (!this.replaying && this.session instanceof SesionCruda) {
-        this.session.push({ kind: "session_update", update: u });
-      }
-      if (u.sessionUpdate === "config_option_update") {
-        this.applyModelOptions(u.configOptions);
-      } else if (u.sessionUpdate === "session_info_update" && u.title) {
-        // El título es del agente: goose lo genera con un LLM leyendo los
-        // primeros mensajes y lo empuja por aquí. El Cliente sólo lo guarda.
-        this.title = u.title;
-        this.titleFromAgent = u.title;
-        recordTitle(this.sessionId, u.title);
-        this.emit("event", { type: "title", title: u.title });
-      }
-    });
-
-    this.conn = app.connect(stream);
-    const ctx = this.conn.agent;
-
-    const init: any = await ctx.request("initialize", {
-      protocolVersion: 1,
-      clientCapabilities: {
-        fs: { readTextFile: false, writeTextFile: false },
-        // Sin terminal del lado del cliente: el agente corre el shell en su
-        // propia caja. Con true, goose pide terminal/create y, como no lo
-        // implementamos, cada shell termina en failed.
-        terminal: false,
-      },
-    });
-    // Lo que el agente dice que sabe hacer. `loadSession` decide si podemos
-    // reanudar un hilo viejo o sólo empezar de cero.
-    this.agentCapabilities = init?.agentCapabilities ?? null;
-    console.log("[acp] agentCapabilities:", JSON.stringify(this.agentCapabilities));
     this.setPhase("session");
+    const ctx = conn.agent;
     if (this.resumeSessionId) {
       // El agente repite el hilo como notificaciones `session/update` ANTES de
       // responder a esta petición; por eso la bandera se baja después.
@@ -477,12 +492,9 @@ class GooseSession extends EventEmitter {
       });
       this.replaying = false;
       this.sessionId = this.resumeSessionId;
+      // El SDK sólo entrega su sesión "activa" cuando nace de un `session/new`;
+      // un hilo reabierto habla por el canal crudo.
       this.session = new SesionCruda(this.conn, this.resumeSessionId) as any;
-      // El agente guarda "New Chat" y NO deja renombrar: sus capacidades son
-      // list, delete y close, sin rename (`session/rename` responde "Method not
-      // found"). Así que el título bueno se deriva del primer mensaje y se
-      // recuerda de este lado; la lista lo toma de aquí mientras el hilo siga
-      // abierto, y vuelve a "New Chat" al reiniciar el server.
       this.title = pickTitle(this.sessionId, this.messages, this.titleFromAgent);
       recordTitle(this.sessionId, this.title);
     } else {
@@ -490,7 +502,10 @@ class GooseSession extends EventEmitter {
       this.sessionId = this.session.sessionId;
     }
     this.ready = true;
-    this.applyModelOptions(this.session.newSessionResponse?.configOptions);
+    this.applyModelOptions(this.session?.newSessionResponse?.configOptions);
+    if (this.modeloPreferido && this.modeloPreferido !== this.currentModel) {
+      void this.setModel(this.modeloPreferido).catch(() => {});
+    }
     this.emit("event", { type: "started", sessionId: this.sessionId });
     this.resetIdle();
     this.pump();
@@ -657,6 +672,28 @@ class GooseSession extends EventEmitter {
       });
   }
 
+  /** Un `session/update` del agente para el hilo abierto. */
+  onSessionUpdate(u: any) {
+    // Durante el replay estos chunks son el historial, no un turno en vivo:
+    // se guardan como mensajes en vez de emitirse al navegador.
+    if (this.replaying && applyReplayChunk(this.messages, u)) return;
+    // En un hilo reanudado el turno vive de estas notificaciones: el SDK no las
+    // está enrutando por nosotros.
+    if (!this.replaying && this.session instanceof SesionCruda) {
+      this.session.push({ kind: "session_update", update: u });
+    }
+    if (u.sessionUpdate === "config_option_update") {
+      this.applyModelOptions(u.configOptions);
+    } else if (u.sessionUpdate === "session_info_update" && u.title) {
+      // El título es del agente: goose lo genera con un LLM leyendo los
+      // primeros mensajes y lo empuja por aquí. El Cliente sólo lo guarda.
+      this.title = u.title;
+      this.titleFromAgent = u.title;
+      recordTitle(this.sessionId, u.title);
+      this.emit("event", { type: "title", title: u.title });
+    }
+  }
+
   /** Devuelve la ranura antes de colgar. El agente cuenta las sesiones abiertas
    *  y no se entera de que el socket murió: sin `session/close` la caja se queda
    *  con la sesión ocupada y a las cuatro empieza a rechazar conexiones. */
@@ -685,9 +722,8 @@ class GooseSession extends EventEmitter {
       try {
         this.session?.dispose();
       } catch {}
-      try {
-        conn?.close?.();
-      } catch {}
+      // La conexión NO se cierra: es del agente, no del hilo, y la siguiente
+      // sesión la reusa sin volver a pagar el handshake.
       this.emit("event", { type: "closed" });
     });
   }
@@ -908,13 +944,32 @@ export function hubState(): HubState {
 // llamada por vista.
 // ---------------------------------------------------------------------------
 const LISTA_TTL_MS = Number(process.env.ACP_LIST_TTL_MS ?? 10_000);
-let listaCache: { at: number; items: ConversationSummary[] } | null = null;
+const LISTA_PATH = process.env.ACP_LIST_PATH ?? ".data/hilos.json";
 
-const invalidarLista = () => (listaCache = null);
+// El historial vive en la caja, pero la pantalla no puede depender de que haya
+// una sesión abierta para pintarlo: si no, la lista aparece, desaparece y baila
+// según qué esté conectado en ese instante. Se guarda la última lista conocida y
+// se refresca por detrás.
+let hilos: ConversationSummary[] = [];
+let hilosAt = 0;
+try {
+  hilos = JSON.parse(readFileSync(LISTA_PATH, "utf8"));
+} catch {
+  // primera vez
+}
+
+function guardarHilos() {
+  try {
+    mkdirSync(dirname(LISTA_PATH), { recursive: true });
+    writeFileSync(LISTA_PATH, JSON.stringify(hilos, null, 2));
+  } catch {}
+}
+
+const invalidarLista = () => (hilosAt = 0);
 
 export async function listAgentSessions(): Promise<any> {
   const s = sesionActual();
-  if (!s) return { sessions: [] };
+  if (!s) return { error: "sin sesión abierta" };
   const caps = s.agentCapabilities;
   if (caps && !caps.sessionCapabilities?.list) return { sessions: [] };
   try {
@@ -924,42 +979,43 @@ export async function listAgentSessions(): Promise<any> {
   }
 }
 
-export async function listHistory(): Promise<ConversationSummary[]> {
-  if (listaCache && Date.now() - listaCache.at < LISTA_TTL_MS) return listaCache.items;
-
-  const viva = sesionActual();
+/** Trae la lista del agente y la guarda. Silencioso: si falla, se queda la vieja. */
+async function refrescarHilos() {
   const remoto: any = await listAgentSessions().catch(() => null);
+  if (!remoto?.sessions) return;
+  hilos = remoto.sessions.map((r: any) => ({
+    id: r.sessionId,
+    title: titles[r.sessionId] || r.title || "Sin título",
+    createdAt: Date.parse(r._meta?.createdAt ?? r.updatedAt),
+    // El `updatedAt` del agente se mueve cada vez que alguien ABRE el hilo:
+    // ordenar por él hace bailar la lista con sólo pasear por el historial.
+    updatedAt: Date.parse(r._meta?.lastMessageAt ?? r.updatedAt),
+    messageCount: r._meta?.messageCount ?? 0,
+    tokens: 0,
+    contextSize: 0,
+    cost: 0,
+    busy: false,
+    closed: true,
+  }));
+  hilosAt = Date.now();
+  guardarHilos();
+}
 
-  // Sin `session/list` —o sin sesión abierta— sólo se puede enseñar el hilo que
-  // se está viendo. Es menos, pero no es mentira.
-  if (!remoto?.sessions) return viva ? [summarize(viva)] : [];
+export async function listHistory(): Promise<ConversationSummary[]> {
+  const viva = sesionActual();
 
-  const items: ConversationSummary[] = remoto.sessions.map((r: any) => {
-    if (viva && viva.sessionId === r.sessionId) return summarize(viva);
-    return {
-      id: r.sessionId,
-      title: titles[r.sessionId] || r.title || "Sin título",
-      createdAt: Date.parse(r._meta?.createdAt ?? r.updatedAt),
-      // El `updatedAt` del agente se mueve cada vez que alguien ABRE el hilo:
-      // ordenar por él hace bailar la lista con sólo pasear por el historial.
-      updatedAt: Date.parse(r._meta?.lastMessageAt ?? r.updatedAt),
-      messageCount: r._meta?.messageCount ?? 0,
-      tokens: 0,
-      contextSize: 0,
-      cost: 0,
-      busy: false,
-      closed: true,
-    };
-  });
+  // Con sesión y la lista vencida, se espera al agente: es rápido y así el hilo
+  // recién creado aparece de inmediato. Sin sesión, se sirve lo guardado.
+  if (viva && Date.now() - hilosAt > LISTA_TTL_MS) await refrescarHilos();
 
+  const items = hilos.map((h) =>
+    viva && viva.sessionId === h.id ? summarize(viva) : h,
+  );
   // Un hilo recién abierto todavía no está en la lista del agente.
   if (viva && !items.some((i) => i.id === (viva.sessionId ?? HILO_NUEVO))) {
     items.unshift(summarize(viva));
   }
-
-  const ordenados = items.sort((a, b) => b.updatedAt - a.updatedAt);
-  listaCache = { at: Date.now(), items: ordenados };
-  return ordenados;
+  return items.sort((a, b) => b.updatedAt - a.updatedAt);
 }
 
 export const config = { wsUrl: WS_URL, cwd: CWD, agentBox: AGENT_BOX, idleMs: IDLE_MS };
@@ -1006,6 +1062,7 @@ async function cerrarTodo() {
     cerrarActual(),
     new Promise((r) => setTimeout(r, 4000)),
   ]);
+  soltarConexion();
 }
 
 for (const senal of ["SIGINT", "SIGTERM", "SIGHUP"] as const) {
