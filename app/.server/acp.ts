@@ -175,6 +175,8 @@ export interface StoredMessage {
 // ---------------------------------------------------------------------------
 class GooseSession extends EventEmitter {
   sessionId: string | null = null;
+  agentCapabilities: any = null;
+  replayCounts: Record<string, number> = {};
   busy = false;
   ready = false;
   closed = false;
@@ -311,6 +313,10 @@ class GooseSession extends EventEmitter {
     // (`Handled.no`), así que esto NO le roba updates al turno en vuelo.
     app.onNotification("session/update", ({ params }: any) => {
       const u = params?.update ?? {};
+      // Durante un `session/load` el agente repite el hilo por aquí. Se cuenta
+      // por tipo para ver qué llega antes de decidir cómo pintarlo.
+      (this.replayCounts as any)[u.sessionUpdate] =
+        ((this.replayCounts as any)[u.sessionUpdate] ?? 0) + 1;
       if (u.sessionUpdate === "config_option_update") {
         this.applyModelOptions(u.configOptions);
       }
@@ -319,7 +325,7 @@ class GooseSession extends EventEmitter {
     this.conn = app.connect(stream);
     const ctx = this.conn.agent;
 
-    await ctx.request("initialize", {
+    const init: any = await ctx.request("initialize", {
       protocolVersion: 1,
       clientCapabilities: {
         fs: { readTextFile: false, writeTextFile: false },
@@ -329,6 +335,10 @@ class GooseSession extends EventEmitter {
         terminal: false,
       },
     });
+    // Lo que el agente dice que sabe hacer. `loadSession` decide si podemos
+    // reanudar un hilo viejo o sólo empezar de cero.
+    this.agentCapabilities = init?.agentCapabilities ?? null;
+    console.log("[acp] agentCapabilities:", JSON.stringify(this.agentCapabilities));
     this.setPhase("session");
     this.session = await ctx.buildSession({ cwd: this.cwd, mcpServers: [] }).start();
     this.sessionId = this.session.sessionId;
@@ -780,3 +790,27 @@ setInterval(() => {
     lastActivity = Date.now();
   }
 }, 30_000).unref?.();
+
+/** Pregunta al agente por sus hilos guardados (`session/list`, capacidad que
+ *  goose anuncia en `initialize`). Reutiliza cualquier conexión viva. */
+export async function listAgentSessions(): Promise<any> {
+  const live = [...conversations.values()].find((s) => s.ready && !s.closed);
+  if (!live) return { error: "sin conexión viva" };
+  return (live as any).conn.agent.request("session/list", {});
+}
+
+/** Reanuda un hilo del agente. El agente responde repitiendo la conversación
+ *  como notificaciones `session/update`; el Cliente sólo tiene que escucharlas. */
+export async function loadAgentSession(sessionId: string, cwd: string) {
+  const live = [...conversations.values()].find((s) => s.ready && !s.closed);
+  if (!live) return { error: "sin conexión viva" };
+  const replay: any[] = [];
+  const off = (live as any).on?.bind(live);
+  (live as any).replayCounts = {};
+  const res = await (live as any).conn.agent.request("session/load", {
+    sessionId,
+    cwd,
+    mcpServers: [],
+  });
+  return { replay: (live as any).replayCounts, modes: res?.modes?.currentModeId };
+}
