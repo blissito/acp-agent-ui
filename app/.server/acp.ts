@@ -323,7 +323,17 @@ class GooseSession extends EventEmitter {
       // Durante el replay estos chunks son el historial, no un turno en vivo:
       // se guardan como mensajes en vez de emitirse al navegador.
       if (this.replaying) {
-        const txt = u.content?.text ?? "";
+        const c = u.content ?? {};
+        const txt = c.text ?? "";
+        // Una imagen del hilo vuelve como content.type === "image" con su
+        // base64: se rearma el data: URI que el chat ya sabe pintar.
+        if (c.type === "image" && c.data) {
+          const img = { mimeType: c.mimeType ?? "image/png", data: c.data };
+          const last = this.messages[this.messages.length - 1];
+          if (last?.role === "user") (last.images ??= []).push(img);
+          else this.messages.push({ role: "user", text: "", images: [img], at: Date.now() });
+          return;
+        }
         if (u.sessionUpdate === "user_message_chunk" && txt) {
           this.messages.push({ role: "user", text: txt, at: Date.now() });
         } else if (u.sessionUpdate === "agent_message_chunk" && txt) {
@@ -880,7 +890,12 @@ async function anyLiveSession(timeoutMs = 20_000): Promise<GooseSession | null> 
 /** El historial que se pinta en /sessions: lo que el agente recuerda, cruzado
  *  con lo que este proceso tiene vivo. Si no hay conexión, quedan los del Map. */
 export async function listHistory(): Promise<ConversationSummary[]> {
-  const enMemoria = listConversations();
+  // Una conversación sin sessionId y sin mensajes nunca llegó a existir para el
+  // agente: es un handshake que se quedó a medias. En la lista sólo estorba,
+  // porque al abrirla no hay hilo que reanudar.
+  const enMemoria = listConversations().filter(
+    (c) => c.sessionId || c.messageCount > 0,
+  );
   const porSesion = new Map(
     enMemoria.filter((c) => c.sessionId).map((c) => [c.sessionId as string, c]),
   );

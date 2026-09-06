@@ -39,7 +39,11 @@ export default function Sessions() {
                   <span className="flex flex-wrap gap-3 text-xs text-text-tertiary">
                     <span>{fecha(c.updatedAt)}</span>
                     <span>{c.messageCount} mensajes</span>
-                    <span>{c.tokens.toLocaleString("es-MX")} tokens</span>
+                    {/* `session/list` no reporta tokens: sólo se muestran los
+                        que este proceso contó de verdad. */}
+                    {c.tokens > 0 && (
+                      <span>{c.tokens.toLocaleString("es-MX")} tokens</span>
+                    )}
                     {c.busy && <span className="text-text-success">respondiendo</span>}
                   </span>
                 </Link>

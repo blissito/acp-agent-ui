@@ -4,7 +4,7 @@
  */
 import { Outlet, useLoaderData } from "react-router";
 import { AppLayout } from "~/components/Layout/AppLayout";
-import { listConversations, prewarm } from "~/.server/acp";
+import { listHistory, prewarm } from "~/.server/acp";
 
 export async function loader() {
   // El handshake con el agente empieza aquí, al abrir la app: despertar la caja
@@ -12,7 +12,7 @@ export async function loader() {
   // pantalla en vez de después de su primer mensaje. No se espera (`void`): si
   // el agente está caído, la interfaz carga igual y el error se ve en el chat.
   prewarm();
-  return { conversations: listConversations() };
+  return { conversations: await listHistory() };
 }
 
 export default function Shell() {
