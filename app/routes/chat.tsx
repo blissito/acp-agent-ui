@@ -263,6 +263,11 @@ function ChatView() {
         </div>
 
         <div className="mx-auto w-full max-w-3xl px-4 pb-4 sm:px-6 sm:pb-6">
+          {readOnly && !loadError && (
+            <p className="mb-2 px-1 text-xs text-text-tertiary">
+              Estás leyendo un hilo guardado en la caja. Escribe para continuarlo.
+            </p>
+          )}
           <ChatInputCard>
             <ChatInput
               onSubmit={send}
@@ -272,7 +277,13 @@ function ChatView() {
               models={models}
               currentModel={currentModel}
               onModelChange={setModel}
-              placeholder={connected ? "Sigue la conversación…" : "Conectando con el agente…"}
+              placeholder={
+                readOnly
+                  ? "Escribe para continuar este hilo…"
+                  : connected
+                    ? "Sigue la conversación…"
+                    : "Conectando con el agente…"
+              }
             />
           </ChatInputCard>
         </div>

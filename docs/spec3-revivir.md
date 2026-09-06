@@ -211,6 +211,28 @@ Si la lista dice `New Chat` para siempre, casi seguro el Cliente está tirando e
   lo generó, y porque un renombre del usuario tiene que sobrevivir. Zed hace justo esto: acepta el
   título del agente y guarda aparte un `title_override` local.
 
+## Nada de esto es de goose
+
+Todo lo que sostiene el historial es ACP estándar: `session/list`, `session/load`, `session/close` y
+el `session_info_update` que trae el título. Cambiar de agente es cambiar la URL.
+
+Comprobado apuntando el mismo Cliente, sin tocar una línea, a una caja `ghosty-lite`: listó su hilo,
+lo leyó por la conexión lectora y lo reabrió al escribir. Los dos agentes anuncian exactamente las
+mismas capacidades en `initialize` — de hecho son el mismo binario con distinta configuración.
+
+Aun así, el Cliente no debe dar por hecho lo que no le dijeron. `initialize` responde qué sabe hacer
+el agente, y de ahí salen tres degradaciones:
+
+| Si falta | Qué se hace |
+|---|---|
+| `sessionCapabilities.list` | la lista enseña sólo las conversaciones vivas de este proceso |
+| `loadSession` | no se ofrece reabrir hilos guardados |
+| `sessionCapabilities.close` | no se pide cerrar; se recicla la conexión entera |
+
+Y una trampa que no es del protocolo: una caja recién creada puede traer el agente vivo **sin
+proveedor de modelo**. Acepta la sesión y revienta con `Internal error` al primer turno. Se ve en
+`/etc/<agente>-runtime/.env` vacío, no en el Cliente.
+
 ## Lo que falta decidir
 
 - **A S3, ¿qué y cómo?** Para el taller: el archivo entero (`.backup` + `PutObject`, y al arrancar

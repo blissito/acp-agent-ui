@@ -609,6 +609,9 @@ class GooseSession extends EventEmitter {
       // Sin handshake completo no hay sesión que cerrar, y la petición se
       // quedaría colgada hasta el timeout.
       if (!sid || !conn || !this.ready) return;
+      // Un agente que no anuncia `close` no tiene por qué entender la petición:
+      // ahí el cierre del socket es todo lo que hay.
+      if (this.agentCapabilities && !this.agentCapabilities.sessionCapabilities?.close) return;
       try {
         await conTimeout(conn.agent.request("session/close", { sessionId: sid }), 3000);
       } catch (e) {
@@ -766,6 +769,12 @@ class ReaderConnection {
 
   private async closeSession(sessionId: string) {
     if (!this.conn) return;
+    // Sin `close` en las capacidades, la única forma de soltar la sesión es
+    // colgar: se recicla la conexión entera.
+    if (this.caps && !this.caps.sessionCapabilities?.close) {
+      this.dispose();
+      return;
+    }
     try {
       await conTimeout(this.conn.agent.request("session/close", { sessionId }), 3000);
     } catch (e) {
@@ -1205,6 +1214,8 @@ export async function listHistory(): Promise<ConversationSummary[]> {
   );
 
   const remoto: any = await listAgentSessions().catch(() => null);
+  // Sin `session/list` —o con el agente caído— sólo se puede enseñar lo que
+  // este proceso tiene abierto. Es menos, pero no es mentira.
   if (!remoto?.sessions) return enMemoria;
 
   const delAgente: ConversationSummary[] = remoto.sessions.map((s: any) => {
