@@ -177,6 +177,9 @@ class GooseSession extends EventEmitter {
   sessionId: string | null = null;
   agentCapabilities: any = null;
   replayCounts: Record<string, number> = {};
+  /** Si viene, en vez de abrir un hilo nuevo se reanuda éste (`session/load`). */
+  resumeSessionId: string | null = null;
+  private replaying = false;
   busy = false;
   ready = false;
   closed = false;
@@ -317,6 +320,18 @@ class GooseSession extends EventEmitter {
       // por tipo para ver qué llega antes de decidir cómo pintarlo.
       (this.replayCounts as any)[u.sessionUpdate] =
         ((this.replayCounts as any)[u.sessionUpdate] ?? 0) + 1;
+      // Durante el replay estos chunks son el historial, no un turno en vivo:
+      // se guardan como mensajes en vez de emitirse al navegador.
+      if (this.replaying) {
+        const txt = u.content?.text ?? "";
+        if (u.sessionUpdate === "user_message_chunk" && txt) {
+          this.messages.push({ role: "user", text: txt, at: Date.now() });
+        } else if (u.sessionUpdate === "agent_message_chunk" && txt) {
+          const last = this.messages[this.messages.length - 1];
+          if (last?.role === "assistant") last.text += txt;
+          else this.messages.push({ role: "assistant", text: txt, at: Date.now() });
+        }
+      }
       if (u.sessionUpdate === "config_option_update") {
         this.applyModelOptions(u.configOptions);
       }
@@ -340,8 +355,24 @@ class GooseSession extends EventEmitter {
     this.agentCapabilities = init?.agentCapabilities ?? null;
     console.log("[acp] agentCapabilities:", JSON.stringify(this.agentCapabilities));
     this.setPhase("session");
-    this.session = await ctx.buildSession({ cwd: this.cwd, mcpServers: [] }).start();
-    this.sessionId = this.session.sessionId;
+    if (this.resumeSessionId) {
+      // El agente repite el hilo como notificaciones `session/update` ANTES de
+      // responder a esta petición; por eso la bandera se baja después.
+      this.replaying = true;
+      await ctx.request("session/load", {
+        sessionId: this.resumeSessionId,
+        cwd: this.cwd,
+        mcpServers: [],
+      });
+      this.replaying = false;
+      this.sessionId = this.resumeSessionId;
+      this.session = { sessionId: this.resumeSessionId } as any;
+      const primero = this.messages.find((m) => m.role === "user")?.text;
+      if (primero) this.title = primero.slice(0, 60);
+    } else {
+      this.session = await ctx.buildSession({ cwd: this.cwd, mcpServers: [] }).start();
+      this.sessionId = this.session.sessionId;
+    }
     this.ready = true;
     this.applyModelOptions(this.session.newSessionResponse?.configOptions);
     this.emit("event", { type: "started", sessionId: this.sessionId });
@@ -702,6 +733,30 @@ export async function createConversation() {
   s.on("event", (e: AcpEvent) => {
     if (e.type === "closed" && conversations.get(id) === s) conversations.delete(id);
   });
+  return id;
+}
+
+/** Abre una conversación local a partir de un hilo que el agente ya tenía.
+ *  Devuelve el id nuevo; los mensajes viejos ya vienen dentro. */
+export async function resumeConversation(sessionId: string) {
+  const yaAbierta = [...conversations.entries()].find(
+    ([, s]) => s.sessionId === sessionId && !s.closed,
+  );
+  if (yaAbierta) return yaAbierta[0];
+
+  if (conversations.size >= MAX_LIVE) {
+    throw new Error(
+      `La caja no atiende más de ${MAX_LIVE} conversaciones a la vez. Cierra una para abrir otra.`,
+    );
+  }
+  const id = randomUUID();
+  const s = new GooseSession(WS_URL, TOKEN, CWD);
+  s.resumeSessionId = sessionId;
+  conversations.set(id, s);
+  s.on("event", (e: AcpEvent) => {
+    if (e.type === "closed") conversations.delete(id);
+  });
+  await s.connect();
   return id;
 }
 

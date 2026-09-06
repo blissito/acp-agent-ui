@@ -139,6 +139,30 @@ conversación. Es, literalmente, el problema de la sesión en miniatura.
 4. Matar el server a media respuesta y comprobar qué sobrevive: ¿el turno se pierde, se reanuda, o
    queda a medias en el historial del agente?
 
+## Cómo quedó (ensayo del 6 sep, rama `testing-session`)
+
+Dos commits, y el resumen es que **el Cliente dejó de ser el registro**:
+
+| | antes | ahora |
+|---|---|---|
+| `/sessions` | el `Map` del proceso | `session/list` del agente, cruzado con lo vivo |
+| abrir un hilo viejo | 404 | `/c/acp:<sessionId>` → `session/load` → redirect al id local |
+| los mensajes del hilo | se perdían | llegan en el replay y se guardan |
+
+Tres cosas que hubo que resolver y no eran obvias:
+
+1. **`session/list` necesita alguien a quien preguntar.** Recién reiniciado el server no hay
+   ninguna conexión, así que el historial salía vacío aunque el agente lo tuviera todo. Se reusa la
+   sesión tibia del precalentado, y si no hay, se abre una y se espera.
+2. **La bandera de replay.** Durante `session/load` los chunks son historial, no un turno en vivo:
+   se acumulan en `messages` en vez de emitirse al navegador. La bandera se baja **después** de que
+   responde la petición, porque el agente repite el hilo antes de contestarla.
+3. **Dos identidades por conversación.** El `id` local (UUID de la ruta) y el `sessionId` del
+   agente. `ConversationSummary` ahora lleva los dos; sin eso no se puede saber si un hilo del
+   agente ya está abierto aquí.
+
+El título de un hilo reanudado sale del primer mensaje de usuario del replay.
+
 ## Lo que falta decidir
 
 - **A S3, ¿qué y cómo?** Para el taller: el archivo entero (`.backup` + `PutObject`, y al arrancar

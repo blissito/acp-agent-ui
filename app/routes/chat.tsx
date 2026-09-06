@@ -3,7 +3,7 @@
  * recargas), y de ahí en adelante el hilo lo alimenta el SSE.
  */
 import { useEffect, useRef } from "react";
-import { useLoaderData } from "react-router";
+import { redirect, useLoaderData } from "react-router";
 import type { Route } from "./+types/chat";
 import { MainPanelLayout } from "~/components/Layout/MainPanelLayout";
 import { ChatInputCard } from "~/components/ChatInputCard";
@@ -29,9 +29,15 @@ import {
 } from "lucide-react";
 import { ConnectingState } from "~/components/ConnectingState";
 import { useAcpStream, type ToolEntry, type Turn } from "~/hooks/useAcpStream";
-import { config, getConversation, getMessages } from "~/.server/acp";
+import { config, getConversation, getMessages, resumeConversation } from "~/.server/acp";
 
 export async function loader({ params }: Route.LoaderArgs) {
+  // `acp:<sessionId>` es un hilo que vive en el agente y todavía no en este
+  // proceso: se reanuda con `session/load` y se redirige al id local.
+  if (params.id.startsWith("acp:")) {
+    const local = await resumeConversation(params.id.slice(4));
+    throw redirect(`/c/${local}`);
+  }
   const conversation = getConversation(params.id);
   if (!conversation) {
     throw new Response("Esa conversación ya no existe", { status: 404 });
