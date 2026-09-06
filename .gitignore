@@ -1,12 +1,11 @@
-node_modules/
-build/
-.react-router/
 
-# El secreto del agente y la URL de su caja viven aquí; nunca al repo.
+!.env.example
+.data/
+.DS_Store
 .env
 .env.*
-!.env.example
-
-.DS_Store
+.react-router/
 *.log
-.data/
+# El secreto del agente y la URL de su caja viven aquí; nunca al repo.
+build/
+node_modules/
