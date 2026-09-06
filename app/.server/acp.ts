@@ -1066,48 +1066,48 @@ export async function listHistory(): Promise<ConversationSummary[]> {
 // ---------------------------------------------------------------------------
 // Skills: la memoria procedimental, vista desde fuera.
 // ---------------------------------------------------------------------------
-// ACP no dice nada de skills —el binario tiene decenas de métodos propios para
-// providers, recetas y horarios, y ninguno para esto—, así que la única fuente
-// honesta es preguntarle a la caja qué ve. Se listan con el CLI del agente, que
-// es exactamente lo que él mismo lee.
+// En la spec de ACP no hay nada de skills, pero goose sí las expone — con otro
+// nombre: `_goose/unstable/sources/*`. Es extensión propietaria, así que si el
+// agente no la entiende la pantalla se queda vacía en vez de romperse.
+//
+// `SourceType` separa lo que trae el binario (`builtinSkill`) de lo que pone el
+// proyecto (`skill`), que es justo la distinción que importa: las del proyecto
+// viven en el repo y vuelven solas si la caja muere.
 // ---------------------------------------------------------------------------
 
 export interface Skill {
   name: string;
   description: string;
   location: string;
-  /** Cargada de fábrica (`builtin://`) o puesta por nosotros. */
   builtin: boolean;
-  /** Puesta por el proyecto, no por el binario: ésa es la que viaja con el repo. */
+  /** Puesta por el proyecto: ésa es la que viaja con el repo. */
   delProyecto: boolean;
 }
 
 export async function listSkills(): Promise<{ skills: Skill[]; error?: string }> {
-  if (!AGENT_BOX) return { skills: [], error: "sin caja que preguntar" };
-  const eb = await getEbClient();
-  if (!eb) return { skills: [], error: "sin SDK de EasyBits" };
+  const s = sesionActual() ?? (await abrirHilo(HILO_NUEVO).catch(() => null));
+  if (!s) return { skills: [], error: "sin agente al que preguntar" };
+
+  const pedir = async (type: "skill" | "builtinSkill") => {
+    const r: any = await conTimeout(
+      (s as any).conn.agent.request("_goose/unstable/sources/list", { type, projectDir: CWD }),
+      15_000,
+    );
+    return (r?.sources ?? []).map((f: any) => ({
+      name: f.name,
+      description: f.description ?? "",
+      location: f.path ?? `builtin://skills/${f.name}`,
+      builtin: type === "builtinSkill",
+      delProyecto: type === "skill",
+    }));
+  };
+
   try {
-    const sb = await eb.sandboxes.get(AGENT_BOX);
-    const bin = CWD.includes("ghosty") || true ? "ghosty" : "goose";
-    const r: any = await sb.exec(`cd ${CWD} && (${bin} skills list 2>/dev/null || goose skills list 2>/dev/null)`);
-    const filas = String(r.stdout ?? "")
-      .split("\n")
-      .map((l) => l.split("|").map((c) => c.trim()))
-      .filter((c) => c.length >= 5 && c[0] && c[0] !== "Name");
-    return {
-      skills: filas.map((c) => ({
-        name: c[0],
-        description: c[1],
-        location: c[4],
-        builtin: c[4].startsWith("builtin://"),
-        // El agente las lee de su directorio de trabajo, pero ahí puede haber un
-        // enlace al repo clonado: la ruta que reporta es la de destino. Lo que
-        // separa unas de otras no es dónde están, sino quién las puso.
-        delProyecto: !c[4].startsWith("builtin://"),
-      })),
-    };
+    const [propias, fabrica] = await Promise.all([pedir("skill"), pedir("builtinSkill")]);
+    return { skills: [...propias, ...fabrica] };
   } catch (e) {
-    return { skills: [], error: (e as Error).message };
+    // Un agente que no sea goose no conoce este método: no es un fallo.
+    return { skills: [], error: `este agente no expone sus skills (${(e as Error).message})` };
   }
 }
 

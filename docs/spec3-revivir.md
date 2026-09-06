@@ -295,9 +295,9 @@ aparecen en `ghosty skills list`):
 
 | ruta | ¿la lee? |
 |---|---|
-| `<cwd>/.goose/skills/<nombre>/SKILL.md` | sí |
-| `<cwd>/.claude/skills/<nombre>/SKILL.md` | sí |
-| `<config>/skills/`, `$HOME/.config/goose/skills/`, `$XDG_DATA_HOME/goose/skills/` | no |
+| `<cwd>/.agents/skills/`, `<cwd>/.goose/skills/`, `<cwd>/.claude/skills/` | sí — del proyecto |
+| `~/.agents/skills/`, `~/.claude/skills/`, `<config>/skills/` | sí, pero son **globales**: no viajan |
+| `$XDG_DATA_HOME/goose/skills/` | no |
 
 Son **relativas al directorio de trabajo**, que es justo el del repo clonado. Por eso "viaja con el
 código" es literal.
@@ -334,6 +334,24 @@ nadie hace commit.
 
 Ahí está el paralelo que cierra la sesión: **la episódica se salva subiéndola; la procedimental,
 commiteándola.** El agente puede aprender solo; recordar es un commit.
+
+### Cómo las pide el Cliente
+
+En la spec de ACP no hay nada de skills, pero **goose sí las expone — con otro nombre**:
+`_goose/unstable/sources/{list,create,update,delete,export,import}`. Buscar "skills" en el binario
+no encuentra nada; se llaman *sources*. Están ya en 1.48, y el `list` devuelve nombre, descripción,
+ruta y **el contenido entero**.
+
+`SourceType` separa `builtinSkill` (las del binario) de `skill` (las del proyecto), que es
+exactamente la distinción que importa en pantalla. Y `create` acepta
+`{scope:"projectDir", projectDir:"/data/work"}`, así que se pueden crear por el mismo canal, sin
+`exec` ni tocar el disco.
+
+Es extensión propietaria, así que el Cliente la pide y, si el agente no la entiende, la pantalla se
+queda vacía en vez de romperse.
+
+Un aviso para más adelante: goose **lee** de `.goose/skills` y `.claude/skills` por compatibilidad,
+pero **escribe** en `.agents/skills`. Si un día se crean desde la UI, aparecerán ahí.
 
 ### La trampa: autodescubrible ≠ leída
 
