@@ -3,7 +3,7 @@
  * recargas), y de ahí en adelante el hilo lo alimenta el SSE.
  */
 import { useEffect, useRef } from "react";
-import { redirect, useLoaderData } from "react-router";
+import { Link, redirect, useLoaderData } from "react-router";
 import type { Route } from "./+types/chat";
 import { MainPanelLayout } from "~/components/Layout/MainPanelLayout";
 import { ChatInputCard } from "~/components/ChatInputCard";
@@ -180,8 +180,28 @@ function ToolRow({ tool }: { tool: ToolEntry }) {
 // Cada conversación necesita su propio estado: sin la key, React reusa la
 // instancia al navegar entre /c/:id y el hilo anterior se queda pegado.
 export default function Chat() {
-  const { id } = useLoaderData<typeof loader>();
+  const { id, error } = useLoaderData<typeof loader>();
+  // Si el hilo no se pudo abrir no hay nada que transmitir: montar el chat sólo
+  // sirve para que el stream falle aparte y se vea un segundo error encima.
+  if (error) return <HiloNoDisponible mensaje={error} />;
   return <ChatView key={id} />;
+}
+
+function HiloNoDisponible({ mensaje }: { mensaje: string }) {
+  return (
+    <MainPanelLayout>
+      <div className="flex h-full flex-col items-center justify-center gap-4 px-6 text-center">
+        <p className="text-lg text-text-primary">Ese hilo no está en la caja</p>
+        <p className="max-w-md text-sm text-text-secondary">{mensaje}</p>
+        <Link
+          to="/sessions"
+          className="rounded-full border border-border-primary px-4 py-1.5 text-sm text-text-secondary transition-colors hover:bg-background-secondary hover:text-text-primary"
+        >
+          Ver el historial
+        </Link>
+      </div>
+    </MainPanelLayout>
+  );
 }
 
 function ChatView() {
