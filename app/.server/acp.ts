@@ -1044,11 +1044,20 @@ export async function listHistory(): Promise<ConversationSummary[]> {
   // recién creado aparece de inmediato. Sin sesión, se sirve lo guardado.
   if (viva && Date.now() - hilosAt > LISTA_TTL_MS) await refrescarHilos();
 
-  const items = hilos.map((h) =>
-    viva && viva.sessionId === h.id ? summarize(viva) : h,
-  );
-  // Un hilo recién abierto todavía no está en la lista del agente.
-  if (viva && !items.some((i) => i.id === (viva.sessionId ?? HILO_NUEVO))) {
+  const items = hilos.map((h) => {
+    if (!viva || viva.sessionId !== h.id) return h;
+    // El hilo abierto aporta lo que sólo él sabe (tokens, si está respondiendo),
+    // pero NO su hora: el reloj de este proceso avanza cada vez que lo abres, y
+    // con eso la fila se movería de sitio sólo por mirarla. La hora es la del
+    // agente, salvo que el hilo tenga mensajes nuevos que él aún no registra.
+    const v = summarize(viva);
+    return { ...v, updatedAt: v.messageCount > h.messageCount ? v.updatedAt : h.updatedAt };
+  });
+  // Un hilo recién estrenado todavía no está en la lista del agente, así que se
+  // pone a mano. Pero sólo si tiene algo dentro: uno vacío —o un id que en esta
+  // caja no existe— sería una fila fantasma que además se cuela arriba.
+  const yaEsta = viva && items.some((i) => i.id === (viva.sessionId ?? HILO_NUEVO));
+  if (viva && !yaEsta && viva.messages.length > 0) {
     items.unshift(summarize(viva));
   }
   return items.sort((a, b) => b.updatedAt - a.updatedAt);
