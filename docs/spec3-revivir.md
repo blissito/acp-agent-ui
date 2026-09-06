@@ -129,36 +129,21 @@ server y volver a abrir una conversación. Es, en miniatura, el problema de esta
 
 ## Lo que hay que hacer
 
-0. Poner `XDG_DATA_HOME=/data/state` en el bootstrap, para que el `sessions.db` de goose deje de
-   colgar del home.
-1. Que `/sessions` liste `session/list` del agente en vez del `Map` del proceso.
-2. Que `/c/:id` haga `session/load` cuando no tiene la sesión en memoria.
-3. Reconectar el SSE a una sesión que ya existía, sin crear una nueva. Si la caja se durmió en
-   medio, el reconnect del WSS la despierta solo: no hace falta llamar a `ensureAgentBox` aquí.
+0. `XDG_DATA_HOME=/data/state` en el bootstrap, para que el `sessions.db` de goose deje de colgar
+   del home y sobreviva a la caja.
+1. Que la lista salga de `session/list` del agente, no del `Map` del proceso.
+2. Que abrir un hilo sea `session/close` del anterior + `session/load` del nuevo.
+3. Que `close()` mande `session/close` de verdad, para devolver la ranura.
 4. Matar el server a media respuesta y comprobar qué sobrevive: ¿el turno se pierde, se reanuda, o
    queda a medias en el historial del agente?
 
-## Cómo queda
-
-El resumen es que **el Cliente deja de ser el registro**:
+El resultado es que **el Cliente deja de ser el registro**:
 
 | | antes | ahora |
 |---|---|---|
-| `/sessions` | el `Map` del proceso | `session/list` del agente, cruzado con lo vivo |
-| abrir un hilo viejo | 404 | `/c/acp:<sessionId>` → `session/load` → redirect al id local |
-| los mensajes del hilo | se perdían | llegan en el replay y se guardan |
-
-Tres cosas que hay que resolver y no son obvias:
-
-1. **`session/list` necesita alguien a quien preguntar.** Recién reiniciado el server no hay
-   ninguna conexión, así que el historial salía vacío aunque el agente lo tuviera todo. Se reusa la
-   sesión tibia del precalentado, y si no hay, se abre una y se espera.
-2. **La bandera de replay.** Durante `session/load` los chunks son historial, no un turno en vivo:
-   se acumulan en `messages` en vez de emitirse al navegador. La bandera se baja **después** de que
-   responde la petición, porque el agente repite el hilo antes de contestarla.
-3. **Dos identidades por conversación.** El `id` local (UUID de la ruta) y el `sessionId` del
-   agente. `ConversationSummary` ahora lleva los dos; sin eso no se puede saber si un hilo del
-   agente ya está abierto aquí.
+| la lista | el `Map` del proceso, vacío en cada reinicio | `session/list` del agente |
+| abrir un hilo viejo | 404 | `session/load`, y el agente repite la conversación |
+| el historial | se perdía con el proceso | vive en la caja |
 
 ## Una sola sesión viva
 
@@ -249,7 +234,7 @@ Todo lo que sostiene el historial es ACP estándar: `session/list`, `session/loa
 el `session_info_update` que trae el título. Cambiar de agente es cambiar la URL.
 
 Comprobado apuntando el mismo Cliente, sin tocar una línea, a una caja `ghosty-lite`: listó su hilo,
-lo leyó por la conexión lectora y lo reabrió al escribir. Los dos agentes anuncian exactamente las
+lo abrió y lo siguió. Los dos agentes anuncian exactamente las
 mismas capacidades en `initialize` — de hecho son el mismo binario con distinta configuración.
 
 Aun así, el Cliente no debe dar por hecho lo que no le dijeron. `initialize` responde qué sabe hacer
