@@ -313,6 +313,28 @@ sin la skill:   export function despedirse(nombre: string)
 
 Mismo agente, mismo modelo, mismo prompt. Lo único que cambió fue un archivo del repo.
 
+### El bootstrap la trae, y el agente puede escribirla
+
+El bootstrap clona el repo del taller en `/data/repo` —aparte, para no pisar el trabajo que el
+agente tenga en `/data/work`— y **enlaza** las skills a donde él las lee:
+
+```sh
+git clone --depth 1 -b <rama> <repo> /data/repo      # o fetch + checkout -B si ya está
+ln -sfn /data/repo/.goose/skills /data/work/.goose/skills
+```
+
+`fetch` + `checkout -B` en vez de `pull`, y `ln -sfn` en vez de `ln -s`: esto corre en cada
+despertar y no puede fallar la segunda vez. Probado: se borra la skill, se duerme la caja, y al
+despertar vuelve sola desde el repo (`eb_boot_exit: 0`).
+
+**Y como es un enlace, el agente puede escribir sus propias skills.** Si le pides que apunte una
+convención, la escribe en su directorio de trabajo y acaba **dentro del repo clonado**:
+`git status` la muestra como archivo nuevo. La usa en el turno siguiente… y muere con la caja si
+nadie hace commit.
+
+Ahí está el paralelo que cierra la sesión: **la episódica se salva subiéndola; la procedimental,
+commiteándola.** El agente puede aprender solo; recordar es un commit.
+
 ### La trampa: autodescubrible ≠ leída
 
 Está escrita en el propio `.goosehints` de la caja y vale para toda la memoria procedimental:

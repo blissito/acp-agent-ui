@@ -1078,8 +1078,8 @@ export interface Skill {
   location: string;
   /** Cargada de fábrica (`builtin://`) o puesta por nosotros. */
   builtin: boolean;
-  /** En el directorio de trabajo, es decir: viaja con el repo. */
-  enElRepo: boolean;
+  /** Puesta por el proyecto, no por el binario: ésa es la que viaja con el repo. */
+  delProyecto: boolean;
 }
 
 export async function listSkills(): Promise<{ skills: Skill[]; error?: string }> {
@@ -1100,7 +1100,10 @@ export async function listSkills(): Promise<{ skills: Skill[]; error?: string }>
         description: c[1],
         location: c[4],
         builtin: c[4].startsWith("builtin://"),
-        enElRepo: c[4].startsWith(CWD),
+        // El agente las lee de su directorio de trabajo, pero ahí puede haber un
+        // enlace al repo clonado: la ruta que reporta es la de destino. Lo que
+        // separa unas de otras no es dónde están, sino quién las puso.
+        delProyecto: !c[4].startsWith("builtin://"),
       })),
     };
   } catch (e) {

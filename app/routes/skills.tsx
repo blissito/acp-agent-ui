@@ -15,8 +15,8 @@ export async function loader() {
 
 export default function Skills() {
   const { skills, error } = useLoaderData<typeof loader>();
-  const delRepo = skills.filter((s) => s.enElRepo);
-  const deFabrica = skills.filter((s) => !s.enElRepo);
+  const delRepo = skills.filter((s) => s.delProyecto);
+  const deFabrica = skills.filter((s) => !s.delProyecto);
 
   return (
     <MainPanelLayout>
