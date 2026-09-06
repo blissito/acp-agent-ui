@@ -526,6 +526,7 @@ const conversations = new Map<string, GooseSession>();
 
 export interface ConversationSummary {
   id: string;
+  sessionId?: string | null;
   title: string;
   createdAt: number;
   updatedAt: number;
@@ -539,6 +540,7 @@ export interface ConversationSummary {
 
 const summarize = (id: string, s: GooseSession): ConversationSummary => ({
   id,
+  sessionId: s.sessionId,
   title: s.title,
   createdAt: s.createdAt,
   updatedAt: s.updatedAt,
@@ -794,9 +796,65 @@ setInterval(() => {
 /** Pregunta al agente por sus hilos guardados (`session/list`, capacidad que
  *  goose anuncia en `initialize`). Reutiliza cualquier conexión viva. */
 export async function listAgentSessions(): Promise<any> {
-  const live = [...conversations.values()].find((s) => s.ready && !s.closed);
+  const live = await anyLiveSession();
   if (!live) return { error: "sin conexión viva" };
   return (live as any).conn.agent.request("session/list", {});
+}
+
+/** Alguien con quien hablar ACP: una conversación abierta, la tibia, o una
+ *  tibia nueva. Recién reiniciado el server no hay ninguna, y sin esto el
+ *  historial se ve vacío aunque el agente lo tenga todo. */
+async function anyLiveSession(timeoutMs = 20_000): Promise<GooseSession | null> {
+  const viva = () =>
+    [...conversations.values()].find((s) => s.ready && !s.closed) ??
+    (warm?.ready && !warm.closed ? warm : null);
+
+  const ya = viva();
+  if (ya) return ya;
+
+  prewarm();
+  const hasta = Date.now() + timeoutMs;
+  while (Date.now() < hasta) {
+    await new Promise((r) => setTimeout(r, 250));
+    const s = viva();
+    if (s) return s;
+  }
+  return null;
+}
+
+/** El historial que se pinta en /sessions: lo que el agente recuerda, cruzado
+ *  con lo que este proceso tiene vivo. Si no hay conexión, quedan los del Map. */
+export async function listHistory(): Promise<ConversationSummary[]> {
+  const enMemoria = listConversations();
+  const porSesion = new Map(
+    enMemoria.filter((c) => c.sessionId).map((c) => [c.sessionId as string, c]),
+  );
+
+  const remoto: any = await listAgentSessions().catch(() => null);
+  if (!remoto?.sessions) return enMemoria;
+
+  const delAgente: ConversationSummary[] = remoto.sessions.map((s: any) => {
+    const vivo = porSesion.get(s.sessionId);
+    if (vivo) return vivo; // el de memoria sabe más: busy, tokens del turno
+    return {
+      id: `acp:${s.sessionId}`,
+      title: s.title || "Sin título",
+      createdAt: Date.parse(s._meta?.createdAt ?? s.updatedAt),
+      updatedAt: Date.parse(s.updatedAt),
+      messageCount: s._meta?.messageCount ?? 0,
+      tokens: 0,
+      contextSize: 0,
+      cost: 0,
+      busy: false,
+      closed: true,
+    };
+  });
+
+  // Conversaciones de este proceso que el agente todavía no registra.
+  const ids = new Set(remoto.sessions.map((s: any) => s.sessionId));
+  const nuevas = enMemoria.filter((c) => !c.sessionId || !ids.has(c.sessionId));
+
+  return [...nuevas, ...delAgente].sort((a, b) => b.updatedAt - a.updatedAt);
 }
 
 /** Reanuda un hilo del agente. El agente responde repitiendo la conversación

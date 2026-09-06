@@ -1,10 +1,10 @@
 import { Link, useLoaderData } from "react-router";
 import { History } from "lucide-react";
 import { MainPanelLayout } from "~/components/Layout/MainPanelLayout";
-import { listConversations } from "~/.server/acp";
+import { listHistory } from "~/.server/acp";
 
 export async function loader() {
-  return { conversations: listConversations() };
+  return { conversations: await listHistory() };
 }
 
 const fecha = (ms: number) =>
@@ -18,8 +18,8 @@ export default function Sessions() {
       <div className="mx-auto w-full max-w-3xl px-6 py-10">
         <h1 className="text-2xl font-light text-text-primary">Historial</h1>
         <p className="mt-1 text-sm text-text-secondary">
-          Las conversaciones vivas de este servidor. No se persisten: un reinicio
-          las borra.
+          Lo que el agente recuerda de su caja. Sobrevive a un reinicio del
+          servidor: el historial no vive aquí.
         </p>
 
         {conversations.length === 0 ? (
