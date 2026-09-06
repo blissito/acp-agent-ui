@@ -4,14 +4,13 @@
  */
 import { Outlet, useLoaderData } from "react-router";
 import { AppLayout } from "~/components/Layout/AppLayout";
-import { listHistory, prewarm } from "~/.server/acp";
+import { listHistory } from "~/.server/acp";
 
 export async function loader() {
   // El handshake con el agente empieza aquí, al abrir la app: despertar la caja
   // y crear la sesión tarda segundos, y así se gastan mientras el usuario lee la
   // pantalla en vez de después de su primer mensaje. No se espera (`void`): si
   // el agente está caído, la interfaz carga igual y el error se ve en el chat.
-  prewarm();
   return { conversations: await listHistory() };
 }
 

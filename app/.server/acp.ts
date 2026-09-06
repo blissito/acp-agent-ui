@@ -235,6 +235,8 @@ class GooseSession extends EventEmitter {
   agentCapabilities: any = null;
   /** Si viene, en vez de abrir un hilo nuevo se reanuda éste (`session/load`). */
   resumeSessionId: string | null = null;
+  /** Con qué modelo arrancar, si el humano ya eligió uno antes. */
+  modeloPreferido: string | null = null;
   /** El nombre que el agente tiene guardado, para no pisarlo si es de verdad. */
   titleFromAgent: string | null = null;
   private replaying = false;
@@ -459,11 +461,14 @@ class GooseSession extends EventEmitter {
       (c: any) => c.category === "model" && c.type === "select"
     );
     if (!model) return;
-    this.modelConfigId = model.id;
+    // El schema nuevo lo llama `configId`; goose todavía emite `id`.
+    this.modelConfigId = model.configId ?? model.id;
     this.models = (model.options ?? [])
       .flatMap((o: any) => (Array.isArray(o.options) ? o.options : [o]))
       .map((o: any) => ({ value: o.value, name: o.name }));
     this.currentModel = model.currentValue ?? null;
+    // El catálogo se recuerda: la portada lo necesita cuando no hay sesión.
+    recordModels(this.models, this.currentModel);
     this.emit("event", {
       type: "models",
       options: this.models,
@@ -632,223 +637,30 @@ class GooseSession extends EventEmitter {
 }
 
 // ---------------------------------------------------------------------------
-// La conexión lectora: mirar un hilo no es conversar.
+// Una sola sesión viva.
 // ---------------------------------------------------------------------------
-// La caja atiende cuatro sesiones a la vez. Si cada hilo que abres para leerlo
-// monta la suya, leer el historial compite con conversar y a la tercera se
-// acaba el cupo. Aquí hay UNA conexión que carga un hilo, se queda con el
-// replay y lo suelta con `session/close`: sirve para todos los hilos, uno tras
-// otro, sin quitarle sitio a nadie.
+// La app es un alumno, una caja, un hilo a la vez: nadie conversa en paralelo.
+// Así que hay UNA conexión y UNA sesión. Abrir un hilo es cerrar el anterior y
+// cargar el nuevo; leerlo y seguirlo son la misma cosa.
+//
+// No es una limitación de esta app: Cline cierra la sesión activa antes de
+// abrir otra tarea, Continue aborta el stream al cargar una sesión, y los CLIs
+// son un proceso por conversación. Los que permiten varias las acotan con un
+// tope pequeño (Zed retiene 5 hilos inactivos). Nadie mantiene una sesión viva
+// por fila del historial.
+//
+// Y aquí importa el doble: una sesión abierta impide que la microVM hiberne, y
+// la caja cobra por estar despierta.
 // ---------------------------------------------------------------------------
 
-export interface ReadThread {
-  sessionId: string;
-  title: string;
-  messages: StoredMessage[];
-}
+/** El hilo que se está viendo. Puede estar conectando, listo o muerto. */
+let actual: GooseSession | null = null;
 
-const READ_TTL_MS = Number(process.env.ACP_READ_TTL_MS ?? 60_000);
-const LOAD_TIMEOUT_MS = Number(process.env.ACP_LOAD_TIMEOUT_MS ?? 45_000);
-
-class ReaderConnection {
-  private conn: any = null;
-  private caps: any = null;
-  private conectando: Promise<void> | null = null;
-  /** Mientras hay algo aquí, las notificaciones son el replay de una carga. */
-  private capturando: StoredMessage[] | null = null;
-  private tituloEnCurso: string | null = null;
-  /** Una carga a la vez: el `session/update` no dice de qué hilo viene, así que
-   *  dos cargas simultáneas mezclarían los mensajes de las dos. */
-  private cola: Promise<unknown> = Promise.resolve();
-
-  get vivo() {
-    return !!this.conn;
-  }
-
-  get capacidades() {
-    return this.caps;
-  }
-
-  private async ensure(): Promise<void> {
-    if (this.conn) return;
-    if (this.conectando) return this.conectando;
-    this.conectando = (async () => {
-      await ensureAgentBox().catch((e) =>
-        console.warn("[reader] ensureAgentBox:", e.message),
-      );
-      const target = new URL(WS_URL);
-      if (TOKEN && !target.searchParams.has("token")) {
-        target.searchParams.set("token", TOKEN);
-      }
-      const headers = TOKEN ? { Authorization: `Bearer ${TOKEN}` } : undefined;
-      const stream = createWebSocketStream(target.toString(), { WebSocket, headers } as any);
-
-      const app = client({ name: "acp-web3-reader" } as any);
-      // Un hilo guardado no debería pedir permisos, pero si los pide y nadie
-      // contesta, el `session/load` se queda colgado hasta el timeout.
-      app.onRequest("session/request_permission", ({ params }: any) => {
-        const options = params.options ?? [];
-        const elegida = options.find((o: any) => o.kind === "reject_once") ?? options[0];
-        return { outcome: { outcome: "selected", optionId: elegida?.optionId } };
-      });
-      app.onNotification("session/update", ({ params }: any) => {
-        const u = params?.update ?? {};
-        if (!this.capturando) return; // fuera de una carga no nos incumbe
-        if (u.sessionUpdate === "session_info_update" && u.title) {
-          this.tituloEnCurso = u.title;
-          return;
-        }
-        applyReplayChunk(this.capturando, u);
-      });
-
-      const conn = app.connect(stream);
-      const init: any = await conTimeout(
-        conn.agent.request("initialize", {
-          protocolVersion: 1,
-          clientCapabilities: { fs: { readTextFile: false, writeTextFile: false }, terminal: false },
-        }),
-        CONNECT_TIMEOUT_MS,
-      );
-      this.caps = init?.agentCapabilities ?? null;
-      this.conn = conn;
-    })().finally(() => {
-      this.conectando = null;
-    });
-    return this.conectando;
-  }
-
-  /** Tira la conexión. La caja libera con ella las sesiones que tuviera. */
-  dispose() {
-    const c = this.conn;
-    this.conn = null;
-    this.capturando = null;
-    try {
-      c?.close?.();
-    } catch {}
-  }
-
-  /** Pide un método suelto (hoy sólo `session/list`) sin cargar ningún hilo. */
-  async request(method: string, params: any = {}): Promise<any> {
-    await this.ensure();
-    try {
-      return await conTimeout(this.conn.agent.request(method, params), LOAD_TIMEOUT_MS);
-    } catch (e) {
-      this.dispose();
-      throw e;
-    }
-  }
-
-  /** Carga un hilo, se queda con el replay y devuelve la ranura. */
-  load(sessionId: string): Promise<ReadThread> {
-    const tarea = async (): Promise<ReadThread> => {
-      await this.ensure();
-      if (this.caps && this.caps.loadSession === false) {
-        throw new Error("Este agente no sabe reabrir hilos guardados (sin `loadSession`).");
-      }
-      markActivity(); // que no se suspenda la caja justo mientras leemos
-      this.capturando = [];
-      this.tituloEnCurso = null;
-      try {
-        await conTimeout(
-          this.conn.agent.request("session/load", { sessionId, cwd: CWD, mcpServers: [] }),
-          LOAD_TIMEOUT_MS,
-        );
-        const messages = this.capturando ?? [];
-        const title = pickTitle(sessionId, messages, this.tituloEnCurso);
-        recordTitle(sessionId, title); // leerlo de paso deja el título bueno guardado
-        return { sessionId, title, messages };
-      } finally {
-        this.capturando = null;
-        await this.closeSession(sessionId);
-      }
-    };
-    // `then(tarea, tarea)` encadena también tras un fallo: una carga rota no
-    // deja la cola atascada para las siguientes.
-    return (this.cola = this.cola.then(tarea, tarea)) as Promise<ReadThread>;
-  }
-
-  private async closeSession(sessionId: string) {
-    if (!this.conn) return;
-    // Sin `close` en las capacidades, la única forma de soltar la sesión es
-    // colgar: se recicla la conexión entera.
-    if (this.caps && !this.caps.sessionCapabilities?.close) {
-      this.dispose();
-      return;
-    }
-    try {
-      await conTimeout(this.conn.agent.request("session/close", { sessionId }), 3000);
-    } catch (e) {
-      // Si no pudo cerrarse, esa sesión sigue ocupando ranura y no hay forma de
-      // soltarla sobre esta conexión: tirar el socket sí la libera.
-      console.warn("[reader] session/close:", String((e as Error).message).slice(0, 120));
-      this.dispose();
-    }
-  }
-}
-
-let reader: ReaderConnection | null = null;
-const getReader = () => (reader ??= new ReaderConnection());
-
-const leidos = new Map<string, { thread: ReadThread; at: number }>();
-
-/** El historial de un hilo, sin ocupar una ranura de conversación. */
-export async function readThread(sessionId: string): Promise<ReadThread> {
-  const cacheado = leidos.get(sessionId);
-  if (cacheado && Date.now() - cacheado.at < READ_TTL_MS) return cacheado.thread;
-
-  let ultimo: unknown;
-  // Un reintento: si el socket se cayó entre dos lecturas, la primera falla y
-  // la segunda ya va con conexión nueva.
-  for (let intento = 0; intento < 2; intento++) {
-    try {
-      const thread = await getReader().load(sessionId);
-      leidos.set(sessionId, { thread, at: Date.now() });
-      return thread;
-    } catch (e) {
-      ultimo = e;
-      getReader().dispose();
-    }
-  }
-  throw ultimo;
-}
-
-/** El hilo dejó de ser sólo lectura (o cambió): fuera del caché. */
-export function invalidateRead(sessionId: string) {
-  leidos.delete(sessionId);
-}
-
-// ---------------------------------------------------------------------------
-// Registro de conversaciones. Vive en el módulo, así que sobrevive entre
-// peticiones — pero no entre reinicios del server (el POC no persiste).
-// ---------------------------------------------------------------------------
-const conversations = new Map<string, GooseSession>();
-
-// Qué hilo del agente había detrás de una conversación que ya se cerró. Una
-// pestaña abierta desde antes sigue pidiendo su id local: con esto se la manda
-// a leer el hilo, en vez de darle un 404 por algo que sí existe en la caja.
-// Se guarda en disco porque el caso típico es justo el reinicio del server.
-const SEPULTADAS_PATH = process.env.ACP_THREADS_PATH ?? ".data/sepultadas.json";
-let sepultadas: Record<string, string> = {};
-try {
-  sepultadas = JSON.parse(readFileSync(SEPULTADAS_PATH, "utf8"));
-} catch {
-  // primera vez
-}
-
-function enterrar(id: string, sessionId: string) {
-  if (sepultadas[id] === sessionId) return;
-  sepultadas[id] = sessionId;
-  try {
-    mkdirSync(dirname(SEPULTADAS_PATH), { recursive: true });
-    writeFileSync(SEPULTADAS_PATH, JSON.stringify(sepultadas, null, 2));
-  } catch {}
-}
-
-export const sessionIdSepultado = (id: string) => sepultadas[id] ?? null;
+/** Id de ruta de un hilo que el agente todavía no ha bautizado. */
+export const HILO_NUEVO = "nuevo";
 
 export interface ConversationSummary {
   id: string;
-  sessionId?: string | null;
   title: string;
   createdAt: number;
   updatedAt: number;
@@ -858,11 +670,12 @@ export interface ConversationSummary {
   cost: number;
   busy: boolean;
   closed: boolean;
+  /** El que está abierto ahora mismo. */
+  activo?: boolean;
 }
 
-const summarize = (id: string, s: GooseSession): ConversationSummary => ({
-  id,
-  sessionId: s.sessionId,
+const summarize = (s: GooseSession): ConversationSummary => ({
+  id: s.sessionId ?? HILO_NUEVO,
   title: s.title,
   createdAt: s.createdAt,
   updatedAt: s.updatedAt,
@@ -872,258 +685,85 @@ const summarize = (id: string, s: GooseSession): ConversationSummary => ({
   cost: s.cost,
   busy: s.busy,
   closed: s.closed,
+  activo: true,
 });
 
-// ---------------------------------------------------------------------------
-// Precalentado: el handshake empieza al abrir la app, no al escribir.
-// ---------------------------------------------------------------------------
-// Despertar la caja, abrir el WebSocket y crear la sesión cuesta segundos que
-// hasta ahora se pagaban DESPUÉS del primer mensaje, mirando "Conectando…".
-// `prewarm()` los adelanta al momento en que se carga la interfaz, y la primera
-// conversación adopta esa sesión ya lista.
-//
-// Se guarda UNA sola: la caja tiene un tope de sesiones simultáneas y quedarse
-// con un puñado abiertas "por si acaso" le quita sitio a las conversaciones de
-// verdad. Por eso tampoco se repone sola al adoptarla.
-let warm: GooseSession | null = null;
+/**
+ * Deja abierto el hilo pedido y devuelve su sesión. `HILO_NUEVO` abre uno en
+ * blanco; cualquier otro id es un `sessionId` del agente y se reabre con
+ * `session/load`.
+ */
+export async function abrirHilo(id: string): Promise<GooseSession> {
+  // Ya es el que está abierto: no se toca nada.
+  if (actual && !actual.closed) {
+    const mismo = id === HILO_NUEVO ? !actual.sessionId : actual.sessionId === id;
+    if (mismo) return actual;
+    // Cerrar de verdad, no sólo colgar: `close()` manda `session/close` y le
+    // devuelve la ranura a la caja para que pueda hibernar.
+    const anterior = actual;
+    actual = null;
+    await anterior.close();
+  }
 
-export function prewarm() {
-  if (!WS_URL || warm) return;
-  // La tibia ocupa una de las ranuras de la caja, así que sólo se precalienta si
-  // cabe: con el cupo lleno, un socket que nadie está usando le quita el sitio a
-  // una conversación de verdad. El `>` (y no `>=`) es deliberado: con tres
-  // conversaciones abiertas la tibia es justo la cuarta, y sí cabe.
-  if (conversations.size + 1 > MAX_CHAT) return;
   const s = new GooseSession(WS_URL, TOKEN, CWD);
-  warm = s;
+  if (id !== HILO_NUEVO) s.resumeSessionId = id;
+  if (preferredModel) s.modeloPreferido = preferredModel;
+  actual = s;
   s.on("event", (e: AcpEvent) => {
-    if (e.type === "closed" && warm === s) warm = null;
+    if (e.type === "closed" && actual === s) actual = null;
   });
-  void s.connect();
-}
-
-// La elección del usuario sobrevive a que la tibia muera o llegue tarde: es una
-// preferencia del humano, no un atributo de la conexión.
-let preferredModel: string | null = null;
-
-/** Lo que el hub necesita saber de la sesión tibia antes de que exista un chat. */
-export interface WarmState {
-  configured: boolean;
-  present: boolean;
-  ready: boolean;
-  phase: ConnectPhase;
-  error: string | null;
-  models: ModelOption[];
-  currentModel: string | null;
-  slots: { live: number; max: number };
-}
-
-export function warmState(): WarmState {
-  return {
-    configured: Boolean(WS_URL),
-    present: Boolean(warm && !warm.closed),
-    ready: Boolean(warm?.ready),
-    phase: warm?.phase ?? "waking",
-    error: warm?.lastError ?? null,
-    models: warm?.models ?? [],
-    currentModel: warm?.currentModel ?? preferredModel,
-    slots: { live: conversations.size, max: MAX_CHAT },
-  };
-}
-
-/**
- * Suscribe a los eventos de la tibia. Es el hermano reducido de `subscribe()`:
- * en una sesión sin turnos sólo circulan fases, modelos y errores. Devuelve
- * null si no hay tibia, para que el hub distinga "no hay" de "ruta rota".
- *
- * A diferencia del SSE del chat, NO toca `openSse()`: ese contador existe para
- * no dormir la caja mientras alguien lee una conversación, y una pestaña del hub
- * olvidada la mantendría despierta —y facturando— para siempre.
- */
-export function subscribeWarm(onEvent: (e: AcpEvent) => void) {
-  const s = warm;
-  if (!s) return null;
-  const handler = (e: AcpEvent) => onEvent(e);
-  s.on("event", handler);
-  if (s.ready && !s.closed) {
-    onEvent({ type: "started", sessionId: s.sessionId ?? "" });
-    if (s.models.length) {
-      onEvent({ type: "models", options: s.models, current: s.currentModel });
-    }
-  } else if (!s.closed) {
-    onEvent({ type: "status", phase: s.phase });
-    if (s.lastError) onEvent({ type: "error", message: s.lastError });
+  await s.connect();
+  if (s.lastError) {
+    // `connect()` no relanza: emite el error y sigue. Sin esto devolveríamos
+    // una sesión muerta y la pantalla se quedaría en "Conectando…".
+    throw new Error(s.lastError);
   }
-  return () => s.off("event", handler);
-}
-
-/**
- * Cambia el modelo desde el hub, antes de que exista conversación. Se guarda
- * SIEMPRE como preferencia —aunque la tibia aún no esté lista o no exista—
- * porque el usuario ya expresó lo que quiere y perderlo por una carrera con el
- * handshake es peor que aplicarlo tarde.
- */
-export async function setWarmModel(value: string) {
-  preferredModel = value;
-  if (!warm || !warm.ready || warm.closed) return false;
-  try {
-    await warm.setModel(value);
-    return true;
-  } catch (e) {
-    console.warn("[setWarmModel]", (e as Error).message);
-    return false;
-  }
-}
-
-/** Deja la sesión en el modelo preferido, ya sea ahora o cuando esté lista. */
-function applyPreferredModel(s: GooseSession) {
-  const wanted = preferredModel;
-  if (!wanted) return;
-  const apply = () => {
-    if (s.currentModel === wanted) return;
-    void s.setModel(wanted).catch(() => {});
-  };
-  // `ensureVisionModel()` puede pisar esto en un turno con imágenes: es
-  // deliberado — ver la imagen importa más que respetar la preferencia.
-  if (s.ready) apply();
-  else s.on("event", function once(e: AcpEvent) {
-    if (e.type !== "started") return;
-    s.off("event", once);
-    apply();
-  });
-}
-
-/** Toma la sesión precalentada si sirve; si falló, la tira y no la reusa. */
-function takeWarm(): GooseSession | null {
-  const s = warm;
-  if (!s) return null;
-  warm = null;
-  if (s.closed || s.lastError) {
-    s.close();
-    return null;
-  }
+  invalidarLista();
   return s;
 }
 
-export async function createConversation(resumeSessionId?: string) {
-  if (resumeSessionId) return promoteConversation(resumeSessionId);
-  if (conversations.size >= MAX_CONVERSATIONS) {
-    throw new Error("too many conversations");
-  }
-  if (conversations.size >= MAX_CHAT) {
-    throw new Error(
-      `La caja no atiende más de ${MAX_CHAT} conversaciones a la vez. Cierra una para abrir otra.`
-    );
-  }
-  // La caja se despierta DENTRO de connect(): así el navegador aterriza en la
-  // conversación al instante y ve las fases, en vez de esperar el POST a ciegas.
-  const id = randomUUID();
-  const s = takeWarm() ?? new GooseSession(WS_URL, TOKEN, CWD);
-  void s.connect(); // no-op si la sesión precalentada ya hizo el handshake
-  applyPreferredModel(s);
-  conversations.set(id, s);
-  s.on("event", (e: AcpEvent) => {
-    if (e.type === "closed" && conversations.get(id) === s) {
-      if (s.sessionId) enterrar(id, s.sessionId);
-      conversations.delete(id);
-    }
-  });
-  return id;
+/** La sesión abierta, si la hay y sigue viva. */
+export function sesionActual(): GooseSession | null {
+  return actual && !actual.closed ? actual : null;
 }
 
-/** El id local de un hilo del agente que ya esté abierto aquí. */
-export function findLocalBySessionId(sessionId: string): string | null {
-  for (const [id, s] of conversations) {
-    if (s.sessionId === sessionId && !s.closed) return id;
-  }
-  return null;
-}
-
-/** Un hilo que se estaba leyendo pasa a ser conversación viva. No desaloja a
- *  nadie: si no cabe, lo dice. */
-export async function promoteConversation(sessionId: string, tituloDelAgente?: string) {
-  const ya = findLocalBySessionId(sessionId);
-  if (ya) return ya;
-  if (conversations.size >= MAX_CHAT) {
-    throw new Error(
-      `Ya tienes ${MAX_CHAT} conversaciones abiertas y la caja no admite más. ` +
-        `Cierra una para continuar este hilo.`,
-    );
-  }
-  invalidateRead(sessionId);
-  const id = randomUUID();
-  const s = new GooseSession(WS_URL, TOKEN, CWD);
-  s.resumeSessionId = sessionId;
-  s.titleFromAgent = tituloDelAgente ?? null;
-  conversations.set(id, s);
-  s.on("event", (e: AcpEvent) => {
-    if (e.type === "closed" && conversations.get(id) === s) {
-      if (s.sessionId) enterrar(id, s.sessionId);
-      conversations.delete(id);
-    }
-  });
-  await s.connect();
-  // `connect()` no relanza: emite el error y sigue. Sin esto devolveríamos el
-  // id de una conversación muerta y la UI se quedaría en "Conectando…".
-  if (s.lastError) {
-    conversations.delete(id);
-    void s.close();
-    throw new Error(s.lastError);
-  }
-  return id;
-}
-
-export function getConversation(id: string) {
-  return conversations.get(id) ?? null;
-}
-
-export function listConversations(): ConversationSummary[] {
-  return [...conversations.entries()]
-    .map(([id, s]) => summarize(id, s))
-    .sort((a, b) => b.updatedAt - a.updatedAt);
+/** ¿Es `id` el hilo que está abierto? */
+function esElActual(id: string) {
+  const s = sesionActual();
+  if (!s) return false;
+  return id === HILO_NUEVO ? !s.sessionId : s.sessionId === id;
 }
 
 export function getMessages(id: string): StoredMessage[] {
-  return conversations.get(id)?.messages ?? [];
+  return esElActual(id) ? (actual?.messages ?? []) : [];
 }
 
-export function closeConversation(id: string) {
-  const s = conversations.get(id);
-  if (!s) return false;
-  s.close();
-  conversations.delete(id);
-  return true;
-}
-
-/** Encola un turno; las imágenes van base64 ({ data, mimeType }). */
 export function askConversation(id: string, text: string, images: ImagePayload[] = []) {
-  const s = conversations.get(id);
-  if (!s) return false;
-  s.ask(text, images);
+  if (!esElActual(id)) return false;
+  actual!.ask(text, images);
   markActivity();
+  invalidarLista();
   return true;
 }
 
-/** Cambia el modelo de la sesión; devuelve false si la conversación no existe. */
 export async function setModel(id: string, value: string) {
-  const s = conversations.get(id);
-  if (!s) return false;
+  preferredModel = value;
+  guardarModelos();
+  if (!esElActual(id)) return false;
   try {
-    await s.setModel(value);
-    return true;
+    await actual!.setModel(value);
   } catch (e) {
     console.warn("[setModel]", (e as Error).message);
-    return false;
   }
+  return true;
 }
 
-/** Suscribe a los eventos de una conversación; devuelve la baja. */
 export function subscribe(id: string, onEvent: (e: AcpEvent) => void) {
-  const s = conversations.get(id);
-  if (!s) return null;
+  const s = sesionActual();
+  if (!s || !esElActual(id)) return null;
   const handler = (e: AcpEvent) => onEvent(e);
   s.on("event", handler);
-  // Quien llega tarde (recarga, segunda pestaña) no vio el started original:
+  // Quien llega tarde (recarga, segunda pestaña) no vio el `started` original:
   // se le repite para que el input no se quede en "Conectando…".
   if (s.ready && s.sessionId && !s.closed) {
     onEvent({ type: "started", sessionId: s.sessionId });
@@ -1135,6 +775,134 @@ export function subscribe(id: string, onEvent: (e: AcpEvent) => void) {
     if (s.lastError) onEvent({ type: "error", message: s.lastError });
   }
   return () => s.off("event", handler);
+}
+
+/** Cierra el hilo abierto: la caja se queda sin sesiones y puede hibernar. */
+export async function cerrarActual() {
+  const s = actual;
+  actual = null;
+  await s?.close();
+}
+
+// ---------------------------------------------------------------------------
+// El modelo elegido y su catálogo.
+// ---------------------------------------------------------------------------
+// ACP no tiene forma de listar modelos sin sesión: los `configOptions` sólo
+// viajan en las respuestas de `session/new` y compañía. Antes se abría una
+// conexión "tibia" nada más para poder pintar el selector en la portada, y esa
+// conexión impedía hibernar. Se guarda la última lista conocida y se refresca
+// sola cuando se abre cualquier hilo.
+// ---------------------------------------------------------------------------
+const MODELS_PATH = process.env.ACP_MODELS_PATH ?? ".data/models.json";
+let modelosCache: ModelOption[] = [];
+let preferredModel: string | null = null;
+try {
+  const guardado = JSON.parse(readFileSync(MODELS_PATH, "utf8"));
+  modelosCache = guardado.models ?? [];
+  preferredModel = guardado.current ?? null;
+} catch {
+  // primera vez: el selector sale vacío hasta el primer hilo
+}
+
+function guardarModelos() {
+  try {
+    mkdirSync(dirname(MODELS_PATH), { recursive: true });
+    writeFileSync(
+      MODELS_PATH,
+      JSON.stringify({ models: modelosCache, current: preferredModel }, null, 2),
+    );
+  } catch (e) {
+    console.warn("[acp] no pude guardar los modelos:", String(e).slice(0, 100));
+  }
+}
+
+/** La sesión acaba de anunciar su catálogo: se recuerda para la próxima. */
+export function recordModels(models: ModelOption[], current: string | null) {
+  if (!models.length) return;
+  modelosCache = models;
+  if (current) preferredModel = current;
+  guardarModelos();
+}
+
+/** Lo que la portada necesita saber sin tener ninguna sesión abierta. */
+export interface HubState {
+  configured: boolean;
+  models: ModelOption[];
+  currentModel: string | null;
+  activo: string | null;
+}
+
+export function hubState(): HubState {
+  const s = sesionActual();
+  return {
+    configured: Boolean(WS_URL),
+    models: s?.models.length ? s.models : modelosCache,
+    currentModel: s?.currentModel ?? preferredModel,
+    activo: s?.sessionId ?? null,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// El historial: se lo preguntamos al agente.
+// ---------------------------------------------------------------------------
+// La lista vive en la caja, no aquí: es la misma decisión que toma el escritorio
+// de goose, que también pide `session/list` en vez de llevar su propio índice.
+// Sólo se guarda un caché corto para que navegar entre pantallas no dispare una
+// llamada por vista.
+// ---------------------------------------------------------------------------
+const LISTA_TTL_MS = Number(process.env.ACP_LIST_TTL_MS ?? 10_000);
+let listaCache: { at: number; items: ConversationSummary[] } | null = null;
+
+const invalidarLista = () => (listaCache = null);
+
+export async function listAgentSessions(): Promise<any> {
+  const s = sesionActual();
+  if (!s) return { sessions: [] };
+  const caps = s.agentCapabilities;
+  if (caps && !caps.sessionCapabilities?.list) return { sessions: [] };
+  try {
+    return await conTimeout((s as any).conn.agent.request("session/list", {}), 15_000);
+  } catch (e) {
+    return { error: (e as Error).message };
+  }
+}
+
+export async function listHistory(): Promise<ConversationSummary[]> {
+  if (listaCache && Date.now() - listaCache.at < LISTA_TTL_MS) return listaCache.items;
+
+  const viva = sesionActual();
+  const remoto: any = await listAgentSessions().catch(() => null);
+
+  // Sin `session/list` —o sin sesión abierta— sólo se puede enseñar el hilo que
+  // se está viendo. Es menos, pero no es mentira.
+  if (!remoto?.sessions) return viva ? [summarize(viva)] : [];
+
+  const items: ConversationSummary[] = remoto.sessions.map((r: any) => {
+    if (viva && viva.sessionId === r.sessionId) return summarize(viva);
+    return {
+      id: r.sessionId,
+      title: titles[r.sessionId] || r.title || "Sin título",
+      createdAt: Date.parse(r._meta?.createdAt ?? r.updatedAt),
+      // El `updatedAt` del agente se mueve cada vez que alguien ABRE el hilo:
+      // ordenar por él hace bailar la lista con sólo pasear por el historial.
+      updatedAt: Date.parse(r._meta?.lastMessageAt ?? r.updatedAt),
+      messageCount: r._meta?.messageCount ?? 0,
+      tokens: 0,
+      contextSize: 0,
+      cost: 0,
+      busy: false,
+      closed: true,
+    };
+  });
+
+  // Un hilo recién abierto todavía no está en la lista del agente.
+  if (viva && !items.some((i) => i.id === (viva.sessionId ?? HILO_NUEVO))) {
+    items.unshift(summarize(viva));
+  }
+
+  const ordenados = items.sort((a, b) => b.updatedAt - a.updatedAt);
+  listaCache = { at: Date.now(), items: ordenados };
+  return ordenados;
 }
 
 export const config = { wsUrl: WS_URL, cwd: CWD, agentBox: AGENT_BOX, idleMs: IDLE_MS };
@@ -1169,22 +937,16 @@ function recordTitle(sessionId: string | null, title: string) {
 // Cerrar al morir. El agente cuenta las conversaciones abiertas y no se entera
 // de que el Cliente desapareció: si el proceso muere sin despedirse —un
 // reinicio del dev server, un deploy— las sesiones siguen ocupando ranura del
-// lado de la caja, y a las cuatro empieza a rechazar con "esta caja ya atiende
-// 4 conversaciones a la vez". Sólo se recupera reiniciando el agente.
+// lado de la caja, y la sesión fantasma le impide hibernar hasta que alguien
+// reinicia el agente.
 // ---------------------------------------------------------------------------
 let despidiendose = false;
 async function cerrarTodo() {
   if (despidiendose) return;
   despidiendose = true;
-  // Antes de soltar el registro, apuntar qué hilo tenía cada conversación: al
-  // volver, sus pestañas abiertas siguen pidiendo el id viejo.
-  for (const [id, s] of conversations) if (s.sessionId) enterrar(id, s.sessionId);
-  const todas = [...conversations.values(), ...(warm ? [warm] : [])];
-  conversations.clear();
-  warm = null;
   // Techo corto: despedirse es cortesía, colgar el Ctrl-C no.
   await Promise.race([
-    Promise.allSettled(todas.map((s) => s.close())),
+    cerrarActual(),
     new Promise((r) => setTimeout(r, 4000)),
   ]);
 }
@@ -1211,68 +973,9 @@ export const closeSse = () => {
 };
 
 setInterval(() => {
-  const busy = [...conversations.values()].some((s) => s.busy);
-  if (activeSse === 0 && !busy && Date.now() - lastActivity > IDLE_MS) {
+  if (activeSse === 0 && !sesionActual()?.busy && Date.now() - lastActivity > IDLE_MS) {
     suspendAgentBox().catch(() => {});
     lastActivity = Date.now();
   }
 }, 30_000).unref?.();
 
-/** Pregunta al agente por sus hilos guardados (`session/list`, capacidad que
- *  goose anuncia en `initialize`). Reutiliza cualquier conexión viva. */
-export async function listAgentSessions(): Promise<any> {
-  // Por la lectora: preguntar qué hilos hay no debería costar una ranura ni
-  // esperar a que se caliente una conversación.
-  try {
-    const caps = getReader().capacidades;
-    if (caps && !caps.sessionCapabilities?.list) {
-      return { sessions: [] }; // el agente no sabe listar: sólo lo que hay vivo
-    }
-    return await getReader().request("session/list", {});
-  } catch (e) {
-    return { error: (e as Error).message };
-  }
-}
-
-export async function listHistory(): Promise<ConversationSummary[]> {
-  // Una conversación sin sessionId y sin mensajes nunca llegó a existir para el
-  // agente: es un handshake que se quedó a medias. En la lista sólo estorba,
-  // porque al abrirla no hay hilo que reanudar.
-  const enMemoria = listConversations().filter(
-    (c) => c.sessionId || c.messageCount > 0,
-  );
-  const porSesion = new Map(
-    enMemoria.filter((c) => c.sessionId).map((c) => [c.sessionId as string, c]),
-  );
-
-  const remoto: any = await listAgentSessions().catch(() => null);
-  // Sin `session/list` —o con el agente caído— sólo se puede enseñar lo que
-  // este proceso tiene abierto. Es menos, pero no es mentira.
-  if (!remoto?.sessions) return enMemoria;
-
-  const delAgente: ConversationSummary[] = remoto.sessions.map((s: any) => {
-    const vivo = porSesion.get(s.sessionId);
-    if (vivo) return vivo; // el de memoria sabe más: busy, tokens del turno
-    return {
-      id: `acp:${s.sessionId}`,
-      title: titles[s.sessionId] || s.title || "Sin título",
-      createdAt: Date.parse(s._meta?.createdAt ?? s.updatedAt),
-      // El `updatedAt` del agente se mueve cada vez que alguien ABRE el hilo:
-      // ordenar por él hace que la lista baile sola con sólo pasear por el
-      // historial. Lo que importa es cuándo se habló.
-      updatedAt: Date.parse(s._meta?.lastMessageAt ?? s.updatedAt),
-      messageCount: s._meta?.messageCount ?? 0,
-      tokens: 0,
-      contextSize: 0,
-      cost: 0,
-      busy: false,
-      closed: true,
-    };
-  });
-
-  // Conversaciones de este proceso que el agente todavía no registra.
-  const ids = new Set(remoto.sessions.map((s: any) => s.sessionId));
-  const nuevas = enMemoria.filter((c) => !c.sessionId || !ids.has(c.sessionId));
-
-  return [...nuevas, ...delAgente].sort((a, b) => b.updatedAt - a.updatedAt);
-}

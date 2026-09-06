@@ -8,75 +8,14 @@ import { MainPanelLayout } from "~/components/Layout/MainPanelLayout";
 import { ChatInputCard } from "~/components/ChatInputCard";
 import { ChatInput } from "~/components/ChatInput";
 import { cn } from "~/lib/utils";
-import { config, warmState } from "~/.server/acp";
-import { useWarmStream, type WarmSeed } from "~/hooks/useWarmStream";
+import { config, hubState } from "~/.server/acp";
 import type { ImagePayload } from "~/hooks/useAcpStream";
 
 export async function loader() {
-  // El estado de la sesión precalentada viaja en el HTML: si el handshake ya
-  // terminó (lo normal a la segunda visita), el selector aparece pintado desde
-  // el primer frame en vez de aparecer medio segundo después.
-  return { cwd: config.cwd, wsUrl: config.wsUrl, warm: warmState() };
-}
-
-/** El estado de la línea con el agente, en una frase y un punto de color. */
-function EstadoConexion({
-  ready,
-  phase,
-  error,
-  gone,
-  slots,
-  onRetry,
-}: {
-  ready: boolean;
-  phase: string;
-  error: string | null;
-  gone: boolean;
-  slots: { live: number; max: number };
-  onRetry: () => void;
-}) {
-  // Que no haya sesión precalentada NO es que el agente esté caído: lo normal es
-  // que no quepa, porque la caja atiende un número fijo de conversaciones a la
-  // vez. Pintarlo en rojo con un "Reintentar" que no puede funcionar era mentir.
-  const sinHueco = !ready && !error && slots.live >= slots.max;
-  const caido = Boolean(error) || (gone && !sinHueco);
-  const texto = sinHueco
-    ? `Sin hueco para precalentar (${slots.live} de ${slots.max} conversaciones); la próxima conectará al abrirse`
-    : caido
-    ? error ?? "Sin línea con el agente"
-    : ready
-      ? "Listo"
-      : phase === "waking"
-        ? "Despertando la caja…"
-        : phase === "connecting"
-          ? "Conectando…"
-          : "Abriendo la sesión…";
-  return (
-    <div className="mb-2 flex items-center gap-2 text-xs text-text-tertiary">
-      <span
-        className={cn(
-          "h-1.5 w-1.5 shrink-0 rounded-full",
-          caido
-            ? "bg-text-danger"
-            : ready
-              ? "bg-text-success"
-              : sinHueco
-                ? "bg-text-tertiary"
-                : "animate-pulse bg-text-tertiary"
-        )}
-      />
-      <span className="truncate">{texto}</span>
-      {caido && (
-        <button
-          type="button"
-          onClick={onRetry}
-          className="shrink-0 underline underline-offset-2 transition-colors hover:text-text-primary"
-        >
-          Reintentar
-        </button>
-      )}
-    </div>
-  );
+  // Sin sesión abierta no se puede preguntar al agente por sus modelos (ACP no
+  // tiene forma de listarlos sin sesión), así que el selector se pinta con el
+  // último catálogo conocido. Se refresca solo al abrir cualquier hilo.
+  return { cwd: config.cwd, wsUrl: config.wsUrl, hub: hubState() };
 }
 
 function useClock() {
@@ -101,13 +40,14 @@ function useClock() {
 export default function Hub({
   loaderData,
 }: {
-  loaderData: { cwd: string; warm: WarmSeed };
+  loaderData: { cwd: string; hub: { models: { value: string; name: string }[]; currentModel: string | null } };
 }) {
   const navigate = useNavigate();
   const clock = useClock();
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const warm = useWarmStream(loaderData.warm);
+  const { models, currentModel: modeloGuardado } = loaderData.hub;
+  const [modelo, setModelo] = useState(modeloGuardado);
 
   const greeting = !clock
     ? ""
@@ -153,14 +93,6 @@ export default function Hub({
           </div>
           <p className="mb-6 text-xl text-text-secondary">{greeting}</p>
 
-          <EstadoConexion
-            ready={warm.ready}
-            phase={warm.phase}
-            error={warm.error}
-            gone={warm.gone}
-            slots={loaderData.warm.slots}
-            onRetry={() => void warm.retry()}
-          />
 
           <ChatInputCard>
             <ChatInput
@@ -168,9 +100,16 @@ export default function Hub({
               busy={creating}
               workingDir={loaderData.cwd}
               withImages
-              models={warm.models}
-              currentModel={warm.currentModel}
-              onModelChange={(v) => void warm.setModel(v)}
+              models={models}
+              currentModel={modelo}
+              onModelChange={(v) => {
+                setModelo(v);
+                void fetch("/api/model", {
+                  method: "POST",
+                  headers: { "content-type": "application/json" },
+                  body: JSON.stringify({ value: v }),
+                });
+              }}
               placeholder="Pídele algo al agente que vive en la caja…"
             />
           </ChatInputCard>

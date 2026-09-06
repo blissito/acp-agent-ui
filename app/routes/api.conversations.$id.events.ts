@@ -5,16 +5,10 @@
  * mantiene abierto mientras el navegador escuche.
  */
 import type { Route } from "./+types/api.conversations.$id.events";
-import {
-  closeSse,
-  getConversation,
-  openSse,
-  subscribe,
-  type AcpEvent,
-} from "~/.server/acp";
+import { closeSse, openSse, sesionActual, subscribe, type AcpEvent } from "~/.server/acp";
 
 export async function loader({ params, request }: Route.LoaderArgs) {
-  if (!getConversation(params.id)) {
+  if (!sesionActual()) {
     return new Response("conversation not found", { status: 404 });
   }
 

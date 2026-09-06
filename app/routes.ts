@@ -7,14 +7,12 @@ import {
 
 export default [
   // Rutas de recurso: la API que consume el navegador (SSE incluido).
+  route("api/model", "routes/api.model.ts"),
   route("api/conversations", "routes/api.conversations.ts"),
   route("api/conversations/:id/events", "routes/api.conversations.$id.events.ts"),
   route("api/conversations/:id/messages", "routes/api.conversations.$id.messages.ts"),
   route("api/conversations/:id/model", "routes/api.conversations.$id.model.ts"),
   route("api/agent-sessions", "routes/api.agent-sessions.ts"),
-  route("api/prewarm", "routes/api.prewarm.ts"),
-  route("api/prewarm/events", "routes/api.prewarm.events.ts"),
-  route("api/prewarm/model", "routes/api.prewarm.model.ts"),
 
   layout("routes/_shell.tsx", [
     index("routes/hub.tsx"),

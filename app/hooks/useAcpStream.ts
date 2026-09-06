@@ -43,12 +43,7 @@ export interface Usage {
 }
 
 export interface AcpStreamOpts {
-  /** Un hilo que se está leyendo del agente: no hay conexión viva detrás. */
-  readOnly?: boolean;
-  /** Al escribir en un hilo de sólo lectura, el server abre una conversación
-   *  de verdad y aquí llega su id nuevo. */
-  onPromoted?: (conversationId: string) => void;
-  /** La conexión murió: el hilo sigue en la caja y se puede seguir leyendo. */
+  /** La conexión murió: el hilo sigue en la caja y se puede reabrir. */
   onDisconnected?: () => void;
 }
 
@@ -69,12 +64,6 @@ export function useAcpStream(
   const streaming = useRef(false);
 
   useEffect(() => {
-    // Leyendo un hilo guardado no hay nada que escuchar: el historial vino
-    // entero en el loader y no hay turno en vuelo.
-    if (opts.readOnly) {
-      setConnected(true);
-      return;
-    }
     const es = new EventSource(`/api/conversations/${encodeURIComponent(conversationId)}/events`);
 
     // Todo lo que llega durante un turno (texto, pensamiento, herramientas)
@@ -149,7 +138,7 @@ export function useAcpStream(
     });
 
     return () => es.close();
-  }, [conversationId, opts.readOnly, opts.onDisconnected]);
+  }, [conversationId, opts.onDisconnected]);
 
   const send = useCallback(
     async (text: string, images: ImagePayload[] = []) => {
@@ -157,32 +146,13 @@ export function useAcpStream(
       setBusy(true);
       streaming.current = false;
 
-      // Escribir en un hilo que sólo se estaba leyendo lo reabre: ahí sí pasa a
-      // ocupar una conversación de la caja.
-      if (opts.readOnly) {
-        const res = await fetch("/api/conversations", {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({ resumeSessionId: conversationId.replace(/^acp:/, ""), text, images }),
-        });
-        const json = await res.json().catch(() => ({}) as any);
-        if (!res.ok || json?.error) {
-          setBusy(false);
-          setError(json?.error ?? "No pude reabrir este hilo.");
-          setTurns((prev) => prev.slice(0, -1)); // deshace el turno optimista
-          return;
-        }
-        opts.onPromoted?.(json.conversationId);
-        return;
-      }
-
       await fetch(`/api/conversations/${encodeURIComponent(conversationId)}/messages`, {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ text, images }),
       });
     },
-    [conversationId, opts.readOnly, opts.onPromoted]
+    [conversationId]
   );
 
   const setModel = useCallback(

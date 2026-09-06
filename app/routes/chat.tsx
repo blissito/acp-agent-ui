@@ -3,7 +3,7 @@
  * recargas), y de ahí en adelante el hilo lo alimenta el SSE.
  */
 import { useEffect, useRef } from "react";
-import { redirect, useLoaderData, useNavigate } from "react-router";
+import { redirect, useLoaderData } from "react-router";
 import type { Route } from "./+types/chat";
 import { MainPanelLayout } from "~/components/Layout/MainPanelLayout";
 import { ChatInputCard } from "~/components/ChatInputCard";
@@ -29,14 +29,7 @@ import {
 } from "lucide-react";
 import { ConnectingState } from "~/components/ConnectingState";
 import { useAcpStream, type ToolEntry, type Turn } from "~/hooks/useAcpStream";
-import {
-  config,
-  findLocalBySessionId,
-  getConversation,
-  getMessages,
-  readThread,
-  sessionIdSepultado,
-} from "~/.server/acp";
+import { abrirHilo, config, getMessages } from "~/.server/acp";
 
 const plano = (m: { role: "user" | "assistant"; text: string; images?: any[] }) => ({
   role: m.role,
@@ -45,59 +38,30 @@ const plano = (m: { role: "user" | "assistant"; text: string; images?: any[] }) 
 });
 
 export async function loader({ params }: Route.LoaderArgs) {
-  // `acp:<sessionId>` es un hilo que vive en el agente. Se LEE, no se abre:
-  // montar una conversación para mirarlo le quitaría sitio a las de verdad.
-  if (params.id.startsWith("acp:")) {
-    const sessionId = params.id.slice(4);
-    // Salvo que ya esté abierto aquí: entonces es esa misma conversación.
-    const local = findLocalBySessionId(sessionId);
-    if (local) throw redirect(`/c/${local}`);
-    try {
-      const hilo = await readThread(sessionId);
-      return {
-        id: params.id,
-        sessionId,
-        readOnly: true,
-        cwd: config.cwd,
-        title: hilo.title,
-        messages: hilo.messages.map(plano),
-        error: null as string | null,
-      };
-    } catch (e) {
-      // Un hilo que ya no está no debe tumbar la página con un 500.
-      return {
-        id: params.id,
-        sessionId,
-        readOnly: true,
-        cwd: config.cwd,
-        title: "Hilo no disponible",
-        messages: [],
-        error: (e as Error).message,
-      };
-    }
+  // Abrir un hilo es cerrar el anterior y cargar éste: hay una sola sesión
+  // viva, así que leerlo y seguirlo son la misma cosa.
+  try {
+    const s = await abrirHilo(params.id);
+    const id = s.sessionId ?? params.id;
+    // El agente le acaba de dar un id al hilo nuevo: la URL pasa a ser ésa.
+    if (params.id !== id) throw redirect(`/c/${id}`);
+    return {
+      id,
+      cwd: config.cwd,
+      title: s.title,
+      messages: getMessages(id).map(plano),
+      error: null as string | null,
+    };
+  } catch (e) {
+    if (e instanceof Response) throw e;
+    return {
+      id: params.id,
+      cwd: config.cwd,
+      title: "No pude abrir el hilo",
+      messages: [],
+      error: (e as Error).message,
+    };
   }
-  const conversation = getConversation(params.id);
-  if (!conversation) {
-    // La conversación se cerró, pero su hilo sigue en la caja: se lee desde
-    // ahí. Sólo es un 404 de verdad si nunca supimos de ella.
-    const enterrada = sessionIdSepultado(params.id);
-    if (enterrada) throw redirect(`/c/acp:${enterrada}`);
-    throw new Response("Esa conversación ya no existe", { status: 404 });
-  }
-  // La conexión murió (idle, reinicio del agente) pero el hilo sigue en la
-  // caja: se lee desde ahí en vez de enseñar un socket muerto con su error.
-  if (conversation.closed && conversation.sessionId) {
-    throw redirect(`/c/acp:${conversation.sessionId}`);
-  }
-  return {
-    id: params.id,
-    sessionId: conversation.sessionId ?? null,
-    readOnly: false,
-    cwd: config.cwd,
-    title: conversation.title,
-    messages: getMessages(params.id).map(plano),
-    error: null as string | null,
-  };
 }
 
 function Bubble({ turn }: { turn: Turn }) {
@@ -221,22 +185,10 @@ export default function Chat() {
 }
 
 function ChatView() {
-  const { id, sessionId, cwd, messages, readOnly, error: loadError } = useLoaderData<typeof loader>();
-  const navigate = useNavigate();
+  const { id, cwd, messages, error: loadError } = useLoaderData<typeof loader>();
   const { turns, busy, connected, phase, error, notice, send, models, currentModel, setModel } = useAcpStream(
     id,
-    messages as Turn[],
-    {
-      readOnly,
-      // Al reabrirlo cambia de identidad: el hilo del agente pasa a ser una
-      // conversación de este proceso, con su propia URL.
-      onPromoted: (nuevo) => navigate(`/c/${nuevo}`, { replace: true }),
-      // Si la conexión se cae, el hilo no se pierde: se sigue leyendo desde la
-      // caja y se reabre escribiendo.
-      onDisconnected: () => {
-        if (sessionId) navigate(`/c/acp:${sessionId}`, { replace: true });
-      },
-    }
+    messages as Turn[]
   );
   const bottom = useRef<HTMLDivElement>(null);
 
@@ -287,11 +239,6 @@ function ChatView() {
         </div>
 
         <div className="mx-auto w-full max-w-3xl px-4 pb-4 sm:px-6 sm:pb-6">
-          {readOnly && !loadError && (
-            <p className="mb-2 px-1 text-xs text-text-tertiary">
-              Estás leyendo un hilo guardado en la caja. Escribe para continuarlo.
-            </p>
-          )}
           <ChatInputCard>
             <ChatInput
               onSubmit={send}
@@ -301,13 +248,7 @@ function ChatView() {
               models={models}
               currentModel={currentModel}
               onModelChange={setModel}
-              placeholder={
-                readOnly
-                  ? "Escribe para continuar este hilo…"
-                  : connected
-                    ? "Sigue la conversación…"
-                    : "Conectando con el agente…"
-              }
+              placeholder={connected ? "Sigue la conversación…" : "Conectando con el agente…"}
             />
           </ChatInputCard>
         </div>

@@ -1,22 +1,20 @@
-/** POST /api/conversations — abre una conversación (y despierta la caja). */
+/** POST /api/conversations — abre un hilo nuevo (y despierta la caja). */
 import { data } from "react-router";
 import type { Route } from "./+types/api.conversations";
-import { askConversation, createConversation, listConversations } from "~/.server/acp";
+import { abrirHilo, askConversation, HILO_NUEVO, listHistory } from "~/.server/acp";
 import type { ImagePayload } from "~/hooks/useAcpStream";
 
 export async function loader() {
-  return data({ conversations: listConversations() });
+  return data({ conversations: await listHistory() });
 }
 
 export async function action({ request }: Route.ActionArgs) {
   if (request.method !== "POST") {
     return data({ error: "method not allowed" }, { status: 405 });
   }
-  // El primer turno puede venir en el mismo POST. Va aquí y no por el `state`
-  // del navegador porque las imágenes son base64: cuatro adjuntos no caben en
-  // `history.state` y el mensaje se perdería sin decir nada.
+  // El primer turno viene en el mismo POST: las imágenes son base64 y no caben
+  // en el `state` del navegador, así que el mensaje se perdería sin decir nada.
   const body = (await request.json().catch(() => ({}))) as {
-    resumeSessionId?: string;
     text?: string;
     images?: ImagePayload[];
   };
@@ -32,14 +30,11 @@ export async function action({ request }: Route.ActionArgs) {
       )
     : [];
   try {
-    // Con `resumeSessionId` no se abre un hilo nuevo: se reabre uno que el
-    // agente ya tenía guardado y que hasta ahora sólo se estaba leyendo.
-    const id = await createConversation(
-      typeof body.resumeSessionId === "string" ? body.resumeSessionId : undefined,
-    );
+    const s = await abrirHilo(HILO_NUEVO);
+    const id = s.sessionId ?? HILO_NUEVO;
     if (text || images.length) askConversation(id, text, images);
     return data({ conversationId: id });
   } catch (e) {
-    return data({ error: (e as Error).message }, { status: 429 });
+    return data({ error: (e as Error).message }, { status: 502 });
   }
 }

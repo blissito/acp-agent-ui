@@ -160,47 +160,59 @@ Tres cosas que hay que resolver y no son obvias:
    agente. `ConversationSummary` ahora lleva los dos; sin eso no se puede saber si un hilo del
    agente ya está abierto aquí.
 
-## Leer no es conversar
+## Una sola sesión viva
 
-La caja atiende cuatro sesiones a la vez. Si abrir un hilo para mirarlo monta su propia conexión, el
-historial compite con las conversaciones y al tercer clic se acaba el cupo. Desalojar a la más
-antigua para hacer sitio parece la salida, y es peor: le tira la conversación en la cara a quien la
-está leyendo.
-
-La separación correcta sale de mirar qué dura cuánto:
+Esta app es un alumno, una caja, un hilo a la vez. Nadie conversa en paralelo. Conviene construirla
+así desde el principio, porque el diseño alternativo —varias conversaciones vivas, cada una con su
+conexión— arrastra un problema en cadena: la caja atiende un número fijo de sesiones, leer el
+historial empieza a competir con conversar, y para arreglarlo aparece un desalojo que le cierra la
+conversación en la cara a quien la está leyendo.
 
 ```
-leer un hilo    →  una conexión lectora:  session/load → replay → session/close
-escribir en él  →  ahí sí, conexión propia y una ranura
+una conexión ACP, reutilizada
+abrir un hilo  =  session/close del anterior  +  session/load del nuevo
 ```
 
-`session/close` devuelve la ranura, y **el hilo con mensajes sobrevive**: sigue en `session/list`
-(uno vacío sí desaparece). Con eso, una sola conexión lee hilos indefinidamente. El hilo se
-"promueve" a conversación viva sólo cuando el usuario escribe; si en ese momento no cabe, se dice —
-no se desaloja a nadie.
+Leer y seguir dejan de ser cosas distintas: abres un hilo, es *el* hilo, y escribes.
 
-Consecuencias en el reparto: de las cuatro ranuras, **una se reserva para el servicio** (la conexión
-tibia o la lectora) y tres quedan para conversar. Listar el historial deja de necesitar una
-conversación viva, que era lo que hacía lenta la primera carga.
+**No es una limitación de esta app, es lo que hace la industria.** Cline llama `endActiveSession()`
+antes de abrir otra tarea; Continue aborta el stream al cargar una sesión; los CLIs (Claude Code,
+Codex, Gemini) son un proceso por conversación. Los dos que permiten varias las acotan con un tope
+pequeño: Zed retiene **5** hilos inactivos y sólo desaloja los que sabe re-hidratar con
+`session/load`; goose usa un LRU de agentes. Nadie mantiene una sesión viva por fila del historial.
 
-Detalles que muerden:
+Y aquí pesa el doble: **una sesión abierta impide que la microVM hiberne**. Por eso el relay de la
+caja tiene un tope —`ACP_MAX_SESSIONS`, que por cierto es una variable de entorno, no una ley del
+protocolo— y por eso `close()` tiene que mandar `session/close` de verdad: colgar el WebSocket no le
+dice nada al agente, la sesión sigue contando, y la caja no se duerme.
 
-- **`close()` tiene que despedirse.** Cerrar el WebSocket no le dice nada al agente: la sesión sigue
-  contando. Sin un `session/close` explícito, un reinicio del Cliente deja ranuras fantasma y a la
-  cuarta la caja rechaza todo hasta que se reinicia el agente.
-- **Leer un hilo lo "toca".** `session/load` mueve el `updatedAt` del agente, así que ordenar la
-  lista por ese campo la hace bailar sola con sólo pasear por el historial. Lo que importa es cuándo
-  se habló: `_meta.lastMessageAt`.
-- **Una conversación muerta no es un 404.** Si su conexión cayó (idle, reinicio del agente) el hilo
-  sigue en la caja: se cae a modo lectura en vez de enseñar un socket muerto con su error — y desde
-  ahí se reabre escribiendo, como cualquier otro. Vale para los tres momentos: al cargar la página,
-  cuando el SSE avisa del cierre, y al volver a una URL vieja después de reiniciar el servidor
-  (para eso hay que **apuntar en disco qué hilo tenía cada conversación**, porque el registro en
-  memoria se va con el proceso).
-- **Una carga a la vez en la lectora.** El `session/update` del replay no dice de qué hilo viene:
-  dos cargas simultáneas mezclarían las dos conversaciones.
-- **Las imágenes viajan aparte.** En el replay llegan como `content.type === "image"` con su base64;
-  si sólo se guarda `content.text`, una conversación que empezó con una foto vuelve sin ella.
+### La URL es el hilo
+
+Con una sesión viva sobra la doble identidad (un id local del Cliente + el `sessionId` del agente),
+que es de donde salen los redirects y los mapas de correspondencia. La ruta es `/c/<sessionId>`
+directamente. Un hilo sin estrenar vive en `/c/nuevo` hasta que el agente lo bautiza.
+
+### La lista
+
+Se le pregunta al agente con `session/list`, con un caché corto para no llamar en cada pantalla. Es
+lo que hace el escritorio de goose, que es el caso idéntico: la base de sesiones ya es del agente,
+así que llevar un índice propio sólo añade algo que desincronizar. Zed y Codex sí guardan índice
+—`sidebar_threads`, `state.sqlite`— porque manejan varios agentes y proyectos.
+
+**No va al navegador.** La memoria vive en la caja: ése es justo el asunto de esta sesión.
+
+### El selector de modelos
+
+**ACP no tiene forma de listar modelos sin sesión**: los `configOptions` sólo viajan en las
+respuestas de `session/new`, `load`, `resume` y `set_config_option`; ni `initialize` ni las
+capacidades traen catálogo. Zed vive con eso creando la sesión por adelantado, que es lo mismo que
+hacíamos con una conexión "tibia" — sólo que Zed no paga una microVM despierta.
+
+La salida es guardar la última lista conocida y pintarla mientras no haya sesión; se refresca sola
+al abrir cualquier hilo. Lo que de verdad importa que sobreviva es la **elección** del humano, no el
+catálogo. (goose ofrece además `_goose/unstable/providers/list`, que no lleva `sessionId`, pero es
+extensión propietaria: detrás de un adaptador si se usa.)
+
 ## El título lo pone el agente
 
 Es el error natural: ver `New Chat` en toda la lista y concluir que el Cliente tiene que inventar
