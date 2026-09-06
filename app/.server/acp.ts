@@ -755,14 +755,21 @@ export async function createConversation() {
   return id;
 }
 
-/** Cierra la conversación inactiva más antigua para hacer sitio. */
+/** Cierra una conversación para hacer sitio, empezando por la que nadie mira.
+ *  Cada pestaña abierta deja un listener "event" (el SSE del chat): cerrar una
+ *  con espectadores le tira la conversación en la cara a quien la está leyendo. */
 function liberaRanura() {
-  const candidata = [...conversations.entries()]
-    .filter(([, s]) => !s.busy && !s.closed)
+  const libres = [...conversations.entries()].filter(([, s]) => !s.busy && !s.closed);
+  const sinPublico = libres.filter(([, s]) => s.listenerCount("event") === 0);
+
+  const candidata = (sinPublico.length ? sinPublico : [])
     .sort((a, b) => a[1].updatedAt - b[1].updatedAt)[0];
+
   if (!candidata) {
     throw new Error(
-      `Las ${MAX_LIVE} conversaciones de la caja están ocupadas. Espera a que alguna termine.`,
+      libres.length
+        ? "Todas las conversaciones abiertas se están viendo. Cierra una pestaña para abrir otro hilo."
+        : `Las ${MAX_LIVE} conversaciones de la caja están ocupadas. Espera a que alguna termine.`,
     );
   }
   const [id, s] = candidata;

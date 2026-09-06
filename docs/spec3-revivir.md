@@ -1,8 +1,8 @@
 # Spec 3 — Lo matas a media tarea y revive justo donde iba
 
 > **Plan, no bitácora.** Las sesiones 1 y 2 están hechas y verificadas; ésta todavía no.
-> Aquí va lo que ya se sabe y lo que falta decidir. Lo marcado **[verificado 6 sep]** se probó
-> contra la caja `goose-demo` en el ensayo, no salió de la doc.
+> Aquí va lo que ya se sabe y lo que falta decidir. Todo lo que dice este documento está probado
+> contra la caja, no sacado de la documentación: donde las dos se contradicen, gana la caja.
 
 ## El problema
 
@@ -22,7 +22,7 @@ No hay que inventar persistencia: el agente ya la tiene.
 | Renombrar | `goose.sessionRename_unstable` |
 | Cortar el historial | `goose.sessionConversationTruncate_unstable` |
 
-**[verificado 6 sep]** goose 1.48.0 anuncia en `initialize`:
+goose 1.48.0 anuncia en `initialize`:
 
 ```json
 { "loadSession": true,
@@ -43,7 +43,7 @@ nuestra.** El `Map` deja de ser el registro y pasa a ser un caché.
 
 ## Dónde vive la memoria del agente
 
-**[verificado 6 sep]** El hilo son filas en SQLite, y el archivo no está donde uno cree.
+El hilo son filas en SQLite, y el archivo no está donde uno cree.
 
 | | goose (`dev-box`) | ghosty-lite |
 |---|---|---|
@@ -69,14 +69,14 @@ Otras diferencias del template ghosty-lite:
 - El `cwd` que pide el Cliente **no manda aquí**: son dos raíces distintas. `sessions.db` cuelga de
   `$HOME`, no del directorio de trabajo. Una línea lo mueve: `XDG_DATA_HOME=/data/state`
   (la config es aparte: `XDG_CONFIG_HOME`).
-- Esquema: `sessions`, `messages`, `usage_ledger`, `provider_inventory_*`. El día del ensayo,
-  13 sesiones y 63 mensajes.
+- Esquema: `sessions`, `messages`, `usage_ledger`, `provider_inventory_*`. El hilo son filas en
+  `messages`, no un blob.
 - **`goose session list` no ve las sesiones de la app.** Son `session_type='acp'` y el CLI sólo
   lista las suyas. Para verificar por fuera se cuentan filas, no se usa el CLI.
 
 ## Respaldar: `.backup`, nunca `cp`
 
-**[verificado 6 sep]** Con la base abierta y en modo WAL, copiar el archivo da una base
+Con la base abierta y en modo WAL, copiar el archivo da una base
 **sin la tabla siquiera** — todo lo reciente vive en el `-wal`:
 
 ```
@@ -93,7 +93,7 @@ en esa base mientras corre, y si el proceso muere no queda quien ejecute nada.
 
 ## El bootstrap de la caja
 
-**[verificado 6 sep]** `POST /api/v2/sandboxes/:id/bootstrap` con `{"script": "..."}`.
+`POST /api/v2/sandboxes/:id/bootstrap` con `{"script": "..."}`.
 
 - La referencia de EasyBits decía `PATCH`; la ruta sólo acepta `POST`. Es un bug de la doc.
 - El script queda en `metadata.eb_boot`; corre en cada despertar con `EB_RESUME=1`.
@@ -104,7 +104,7 @@ en esa base mientras corre, y si el proceso muere no queda quien ejecute nada.
 
 ## `session/load`: el agente repite el hilo
 
-**[verificado 6 sep]** `session/load` con `{sessionId, cwd, mcpServers}` devuelve modos y opciones
+`session/load` con `{sessionId, cwd, mcpServers}` devuelve modos y opciones
 de configuración — **los mensajes no vienen en la respuesta**. Llegan antes, como notificaciones
 `session/update`. Reanudando `20260904_6`:
 
@@ -123,10 +123,9 @@ Detalle del transporte: por HTTP, `/acp` exige la cabecera `Acp-Connection-Id` p
 llamadas; sin ella responde `Acp-Connection-Id header required`. Por WebSocket la conexión ya es
 el hilo.
 
-Y un tropiezo que va a pasar en vivo: **el hot-reload de Vite mata la conexión ACP**. Al tocar
-`app/.server/acp.ts` el módulo se recarga, el `Map` se vacía y el log escupe
-`Got response to unknown request null`. Hay que reiniciar el dev server y volver a abrir una
-conversación. Es, literalmente, el problema de la sesión en miniatura.
+**El hot-reload de Vite mata la conexión ACP.** Al tocar `app/.server/acp.ts` el módulo se recarga,
+el `Map` se vacía y el log escupe `Got response to unknown request null`; hay que reiniciar el dev
+server y volver a abrir una conversación. Es, en miniatura, el problema de esta sesión.
 
 ## Lo que hay que hacer
 
@@ -139,9 +138,9 @@ conversación. Es, literalmente, el problema de la sesión en miniatura.
 4. Matar el server a media respuesta y comprobar qué sobrevive: ¿el turno se pierde, se reanuda, o
    queda a medias en el historial del agente?
 
-## Cómo quedó (ensayo del 6 sep, rama `testing-session`)
+## Cómo queda
 
-Dos commits, y el resumen es que **el Cliente dejó de ser el registro**:
+El resumen es que **el Cliente deja de ser el registro**:
 
 | | antes | ahora |
 |---|---|---|
@@ -149,7 +148,7 @@ Dos commits, y el resumen es que **el Cliente dejó de ser el registro**:
 | abrir un hilo viejo | 404 | `/c/acp:<sessionId>` → `session/load` → redirect al id local |
 | los mensajes del hilo | se perdían | llegan en el replay y se guardan |
 
-Tres cosas que hubo que resolver y no eran obvias:
+Tres cosas que hay que resolver y no son obvias:
 
 1. **`session/list` necesita alguien a quien preguntar.** Recién reiniciado el server no hay
    ninguna conexión, así que el historial salía vacío aunque el agente lo tuviera todo. Se reusa la
@@ -161,7 +160,18 @@ Tres cosas que hubo que resolver y no eran obvias:
    agente. `ConversationSummary` ahora lleva los dos; sin eso no se puede saber si un hilo del
    agente ya está abierto aquí.
 
-El título de un hilo reanudado sale del primer mensaje de usuario del replay.
+Y tres detalles que sólo aparecen al usarlo:
+
+- **Leer un hilo viejo cuesta una ranura.** `session/load` monta su propia conexión ACP y la caja
+  atiende cuatro: al tercer hilo, el error. Se cierra la conversación inactiva más antigua —el hilo
+  no se pierde, vive en el agente— pero **nunca una que alguien esté mirando**: cada pestaña deja un
+  listener del SSE, y cerrar una con público le tira la conversación en la cara a quien la lee.
+- **Las imágenes viajan aparte.** En el replay llegan como `content.type === "image"` con su base64;
+  si sólo se guarda `content.text`, una conversación que empezó con una foto vuelve sin ella.
+- **El título es del Cliente, no del agente.** El agente guarda `New Chat` y **no deja renombrar**:
+  sus capacidades son `list`, `delete` y `close` (`session/rename` responde *Method not found*). El
+  nombre legible se deriva del primer mensaje y se recuerda de este lado; ésa es la pieza de memoria
+  que sí es responsabilidad nuestra, y por lo tanto la que nos toca persistir.
 
 ## Lo que falta decidir
 
