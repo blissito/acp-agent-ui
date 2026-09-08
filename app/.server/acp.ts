@@ -235,6 +235,8 @@ function conTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
 // del agente, no del hilo: se abre una vez y las sesiones van y vienen por
 // dentro. (Es lo que hace Zed: una conexión por agente, multiplexando.)
 // ---------------------------------------------------------------------------
+const REPLAY_TAIL = Number(process.env.ACP_REPLAY_TAIL ?? 0) || 0;
+
 let conexion: { conn: any; caps: any; socket?: any } | null = null;
 let conectando: Promise<{ conn: any; caps: any; socket?: any }> | null = null;
 
@@ -337,6 +339,21 @@ function soltarConexion() {
  * la misma forma: los `session/update` que llegan por notificación se encolan, y
  * `prompt` es la petición cruda.
  */
+/**
+ * ¿El agente dejó de reconocer nuestra sesión? Pasa cuando la caja se suspende
+ * a media conversación: al despertar, goose arranca sin las sesiones vivas y
+ * cualquier `session/prompt` con el id anterior cae en Invalid params (-32602).
+ */
+function sesionPerdida(e: Error & { code?: number }): boolean {
+  const m = (e?.message ?? "").toLowerCase();
+  return (
+    e?.code === -32602 ||
+    m.includes("invalid params") ||
+    m.includes("session not found") ||
+    m.includes("unknown session")
+  );
+}
+
 class SesionCruda {
   private cola: any[] = [];
   private esperando: ((m: any) => void) | null = null;
@@ -484,6 +501,19 @@ class GooseSession extends EventEmitter {
     }
   }
 
+  /** Vuelve a abrir el hilo después de que la caja durmiera. */
+  private async reabrirTrasSiesta() {
+    soltarConexion();
+    this.conn = null;
+    this.ready = false;
+    // El hilo sigue en el sessions.db de la caja: se reabre por id en vez de
+    // empezar uno nuevo, y así el agente no pierde lo hablado.
+    if (this.sessionId) this.resumeSessionId = this.sessionId;
+    await ensureAgentBox().catch(() => {});
+    this.setPhase("connecting");
+    await Promise.race([this.handshake(), this.timeoutDeConexion()]);
+  }
+
   private timeoutDeConexion(): Promise<never> {
     return new Promise<never>((_, reject) => {
       const t = setTimeout(
@@ -510,10 +540,15 @@ class GooseSession extends EventEmitter {
       // El agente repite el hilo como notificaciones `session/update` ANTES de
       // responder a esta petición; por eso la bandera se baja después.
       this.replaying = true;
+      // `replayTail` recorta el replay a los últimos N turnos, cortando en
+      // frontera de turno para no partir un par tool-request/response. Sólo
+      // acelera la carga del hilo: el contexto que el agente le pasa al modelo
+      // no cambia. Apagado por defecto; se enciende con ACP_REPLAY_TAIL.
       await ctx.request("session/load", {
         sessionId: this.resumeSessionId,
         cwd: this.cwd,
         mcpServers: [],
+        ...(REPLAY_TAIL ? { _meta: { replayTail: REPLAY_TAIL } } : {}),
       });
       this.replaying = false;
       this.sessionId = this.resumeSessionId;
@@ -645,6 +680,7 @@ class GooseSession extends EventEmitter {
               })),
             ]
           : item.text;
+      const correrTurno = async () => {
       const promptP = this.session.prompt(content);
       while (true) {
         const m = await this.session.nextUpdate();
@@ -685,7 +721,25 @@ class GooseSession extends EventEmitter {
           this.emit("event", { type: "usage", used, size, cost });
         }
       }
-      const r = await promptP;
+      return await promptP;
+      };
+
+      let r;
+      try {
+        r = await correrTurno();
+      } catch (e) {
+        // La caja durmió a media conversación: goose arrancó de cero y el
+        // sessionId que teníamos ya no existe del otro lado. Se reabre el hilo
+        // y se manda el turno otra vez. Sólo si aún no llegó texto: repetir con
+        // media respuesta pintada la duplicaría.
+        if (!sesionPerdida(e as Error) || answer) throw e;
+        this.emit("event", {
+          type: "warning",
+          message: "La caja había dormido; reabro el hilo y lo mando de nuevo.",
+        });
+        await this.reabrirTrasSiesta();
+        r = await correrTurno();
+      }
       this.messages.push({ role: "assistant", text: answer, at: Date.now() });
       this.updatedAt = Date.now();
       this.emit("event", { type: "done", stopReason: r.stopReason, usage: turnUsage });
@@ -739,7 +793,12 @@ class GooseSession extends EventEmitter {
       try {
         await conTimeout(conn.agent.request("session/close", { sessionId: sid }), 3000);
       } catch (e) {
-        console.warn("[acp] session/close:", String((e as Error).message).slice(0, 120));
+        const msg = String((e as Error).message);
+        console.warn("[acp] session/close:", msg.slice(0, 120));
+        // Si el cierre ni siquiera llegó, la conexión está muerta (la caja
+        // durmió). Guardarla condena a los siguientes hilos a esperar 3 s por
+        // cada `session/close` que nadie va a contestar.
+        if (/closed|timeout/i.test(msg)) soltarConexion();
       }
     })();
 
