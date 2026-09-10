@@ -27,6 +27,11 @@ const WS_URL = process.env.ACP_WS_URL ?? "";
 const TOKEN = process.env.ACP_TOKEN ?? process.env.ACP_SECRET ?? "";
 
 // `/data/work` es lo que existe en una caja ghosty-lite y lo único que sobrevive al sueño.
+/** Lo único que este Cliente le impone al Agente. Se manda una vez por hilo. */
+const IDIOMA =
+  process.env.ACP_IDIOMA ??
+  "Contesta siempre en español, aunque la pregunta venga en otro idioma.";
+
 const CWD = process.env.ACP_CWD ?? "/data/work";
 const MAX_CONVERSATIONS = Number(process.env.MAX_CONVERSATIONS ?? 10);
 
@@ -220,7 +225,11 @@ export function applyReplayChunk(msgs: StoredMessage[], u: any): boolean {
   }
   const txt = c.text ?? "";
   if (u?.sessionUpdate === "user_message_chunk" && txt) {
-    msgs.push({ role: "user", text: txt, at: Date.now() });
+    // El primer turno viajó con la instrucción de idioma pegada delante; el
+    // agente la guardó tal cual. Aquí se quita: es nuestra, no del humano, y
+    // si no acaba siendo el título de todos los hilos.
+    const limpio = txt.startsWith(IDIOMA) ? txt.slice(IDIOMA.length).trimStart() : txt;
+    msgs.push({ role: "user", text: limpio, at: Date.now() });
     return true;
   }
   if (u?.sessionUpdate === "tool_call" || u?.sessionUpdate === "tool_call_update") {
@@ -634,13 +643,18 @@ class GooseSession extends EventEmitter {
   ask(text: string, images: ImagePayload[] = []) {
     if (this.closed) return;
     this.resetIdle();
+    // El primer turno lleva pegada la instrucción de idioma. ACP no tiene
+    // campo para el prompt de sistema y el método de goose que lo pone
+    // (`session/system-prompt/set`) no está documentado; esto es explícito y
+    // funciona con cualquier agente. Sin ello DeepSeek contesta en chino.
+    const prefijo = this.messages.length === 0 ? IDIOMA + "\n\n" : "";
     this.messages.push({ role: "user", text, images: images.length ? images : undefined, at: Date.now() });
     if (this.messages.length === 1) {
       this.title = (text || "📷 imagen").slice(0, 60);
       recordTitle(this.sessionId, this.title);
     }
     this.updatedAt = Date.now();
-    this.queue.push({ text, images: images.length ? images : undefined });
+    this.queue.push({ text: prefijo + text, images: images.length ? images : undefined });
     this.pump();
   }
 
