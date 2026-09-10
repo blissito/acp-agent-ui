@@ -123,9 +123,21 @@ export function useAcpStream(
         return next;
       });
     });
-    es.addEventListener("done", () => {
+    es.addEventListener("done", (e) => {
       streaming.current = false;
       setBusy(false);
+      // Un turno puede acabar por algo que no es "ya terminé": se quedó sin
+      // presupuesto de salida, se rechazó, se cortó. Sin decirlo, la pantalla
+      // se ve igual que un final normal y parece que el agente se calló solo.
+      const data = (e as MessageEvent).data;
+      const razon = data ? JSON.parse(data).stopReason : null;
+      const MOTIVO: Record<string, string> = {
+        max_tokens: "El agente se quedó sin espacio de respuesta. Pídele que siga.",
+        max_turn_requests: "El agente llegó a su tope de herramientas por turno. Pídele que siga.",
+        refusal: "El agente se negó a seguir.",
+        cancelled: "Turno cortado.",
+      };
+      setNotice(razon && MOTIVO[razon] ? MOTIVO[razon] : null);
     });
     es.addEventListener("warning", (e) => {
       const data = (e as MessageEvent).data;

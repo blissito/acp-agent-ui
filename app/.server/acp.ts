@@ -815,14 +815,25 @@ class GooseSession extends EventEmitter {
           : item.text;
       const correrTurno = async () => {
       const promptP = this.session.prompt(content);
+      // Lo que el agente escriba después de una herramienta abre párrafo.
+      let trasHerramienta = false;
       while (true) {
         const m = await this.session.nextUpdate();
         if (m.kind === "stop") break;
         if (m.kind !== "session_update") continue;
         const u = m.update ?? {};
         if (u.sessionUpdate === "agent_message_chunk") {
-          const t = u.content?.text ?? "";
+          let t = u.content?.text ?? "";
           if (t) {
+            // El agente retoma la frase después de usar una herramienta y el
+            // texto queda pegado al de antes: "…espero el resultado.Confirmado:
+            // encontré…". Son dos momentos distintos, así que se separan con
+            // punto y aparte.
+            if (trasHerramienta && answer && !/\n\s*$/.test(answer)) {
+              answer += "\n\n";
+              this.emit("event", { type: "chunk", text: "\n\n" });
+            }
+            trasHerramienta = false;
             answer += t;
             this.emit("event", { type: "chunk", text: t });
           }
@@ -842,6 +853,7 @@ class GooseSession extends EventEmitter {
           if (path) ev.path = path;
           const { type: _t, ...entry } = ev;
           upsertTool(this.messages, entry as ToolEntry);
+          trasHerramienta = true;
           this.emit("event", ev);
         } else if (u.sessionUpdate === "config_option_update") {
           this.applyModelOptions(u.configOptions);
