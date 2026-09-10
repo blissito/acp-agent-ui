@@ -47,6 +47,14 @@ desapareció del host sin aviso (404 "sandbox not found") mientras figuraba `run
   el `expiresAt` viejo y rechaza con 400, y EasyBits lo convierte en 500. Arreglos en rama en
   `sandbox-host` y `easybits`, pendientes de desplegar.
 
+- **Cinco cuelgues que ya no lo son** (10 sep). Todos eran del Cliente, no de la caja:
+  `ensureAgentBox` sin plazo en ninguna llamada (de ahí los minutos en "despertando la caja",
+  con el tope del handshake sin llegar a contar); el contador de streams SSE bajando el doble
+  —`abort` y `cancel` disparan los dos— que dormía la caja con pestañas abiertas; un handshake
+  vencido que dejaba el socket muerto en la caché y condenaba a los hilos siguientes; un mensaje
+  a un hilo dormido que devolvía 404 en vez de reabrirlo; y el turno en vuelo que se perdía al
+  cambiar de hilo. `ACP_DEBUG_SSE=1` enseña el contador de streams, que es la única forma de ver
+  el segundo.
 - **La caja se suspende sola** al quedar inactiva. La despierta el propio `Upgrade` del WebSocket
   (verificado el 1 sep 2026); `ensureAgentBox` sólo extiende el TTL, suspende al ocio y avisa si la
   caja ya no existe. La unidad de systemd relanza `goose serve` al arrancar. Antes de eso, cada

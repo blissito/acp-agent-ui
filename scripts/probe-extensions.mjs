@@ -42,13 +42,11 @@ const probar = async (metodo, params) => {
 await probar("_goose/unstable/session/extensions/list", { sessionId });
 await probar("_goose/unstable/extensions/available", {});
 await probar("_goose/unstable/config/extensions/list", {});
-// GooseExtension::Mcp lleva dentro el McpServer de ACP, en el campo `server`.
-const ext = {
-  type: "mcp", name: "hello", description: "El MCP de la clase",
-  display_name: "Hello", timeout: 60, bundled: false, available_tools: [], envKeys: [],
-  server: { name: "hello", command: "/usr/local/bin/node", args: ["/data/repo/mcp/hello.ts"], env: [] },
-};
-await probar("_goose/unstable/session/extensions/add", { sessionId, extension: ext });
-await probar("_goose/unstable/session/extensions/list", { sessionId });
+await probar("_goose/unstable/session/system-prompt/set", { sessionId, mode: "append", prompt: "X", persist: false });
+await probar("_goose/unstable/session/system-prompt/set", { sessionId, mode: "append", content: "X", persist: false });
+await probar("_goose/unstable/session/system-prompt/set", { sessionId, mode: "append", text: "X", persist: false });
+await probar("_goose/unstable/session/system-prompt/set", { sessionId, mode: "append", systemPrompt: "X", persist: false });
+await probar("_goose/unstable/session/system-prompt/set", { sessionId, mode: "append", prompt: "X", extend: false });
+await probar("_goose/unstable/session/system-prompt/set", { sessionId, mode: "append", prompt: "X", source: "client" });
 
 process.exit(0);

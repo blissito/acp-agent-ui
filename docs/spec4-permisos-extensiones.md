@@ -88,6 +88,22 @@ permiso** antes de lo arriesgado, y la web todavía lo auto-aprueba.
 Con DeepSeek también hacía falta pegarle al primer turno la instrucción de idioma
 (`ACP_IDIOMA` en `acp.ts`): sin ella contestaba en chino.
 
+### Lo que se arregló de camino
+
+Nada de esto estaba planeado; salió de usar la app en serio durante la preparación de la sesión.
+Vale como material: son los fallos que aparecen cuando un cliente ACP se enfrenta a una caja que
+duerme.
+
+| Se veía como | Era |
+|---|---|
+| "Despertando la caja" cinco minutos | `ensureAgentBox` sin plazo en ninguna llamada |
+| La caja dormida con la pestaña abierta | el contador de streams SSE bajaba dos veces por conexión |
+| Un mensaje que se manda y desaparece al recargar | el servidor devolvía 404 en vez de reabrir el hilo |
+| Salir del chat y volver sin la respuesta | `session/close` con el turno todavía en vuelo |
+| Un hilo sin rastro de lo que hizo el agente | las herramientas no se guardaban, sólo se emitían |
+| Spinners girando para siempre | un turno cortado no cierra sus `tool_call` |
+| Todos los hilos titulados igual | el agente titulaba con la instrucción de idioma que le pegamos |
+
 ## Lo que falta decidir
 
 - **Timeout de un permiso sin respuesta.** ¿El turno se cae, o espera indefinido?
