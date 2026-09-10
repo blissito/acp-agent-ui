@@ -58,6 +58,10 @@ export async function loader({ params }: Route.LoaderArgs) {
       cwd: config.cwd,
       title: s.title,
       messages: getMessages(id).map(plano),
+      // Si el agente sigue escribiendo, el navegador tiene que sumar lo que
+      // llegue al último mensaje en vez de abrir otro: si no, la respuesta se
+      // parte en dos y parece que llegó fuera de orden.
+      enVuelo: s.busy,
       error: null as string | null,
     };
   } catch (e) {
@@ -67,6 +71,7 @@ export async function loader({ params }: Route.LoaderArgs) {
       cwd: config.cwd,
       title: "No pude abrir el hilo",
       messages: [],
+      enVuelo: false,
       error: (e as Error).message,
     };
   }
@@ -257,10 +262,11 @@ function HiloNoDisponible({ mensaje }: { mensaje: string }) {
 }
 
 function ChatView() {
-  const { id, cwd, messages, error: loadError } = useLoaderData<typeof loader>();
+  const { id, cwd, messages, enVuelo, error: loadError } = useLoaderData<typeof loader>();
   const { turns, busy, connected, phase, error, notice, send, stop, models, currentModel, setModel } = useAcpStream(
     id,
-    messages as Turn[]
+    messages as Turn[],
+    { enVuelo }
   );
   const bottom = useRef<HTMLDivElement>(null);
   const scroller = useRef<HTMLDivElement>(null);

@@ -45,6 +45,8 @@ export interface Usage {
 export interface AcpStreamOpts {
   /** La conexión murió: el hilo sigue en la caja y se puede reabrir. */
   onDisconnected?: () => void;
+  /** El agente ya estaba contestando cuando se abrió esta página. */
+  enVuelo?: boolean;
 }
 
 export function useAcpStream(
@@ -53,7 +55,7 @@ export function useAcpStream(
   opts: AcpStreamOpts = {}
 ) {
   const [turns, setTurns] = useState<Turn[]>(initial);
-  const [busy, setBusy] = useState(false);
+  const [busy, setBusy] = useState(!!opts.enVuelo);
   const [connected, setConnected] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -61,7 +63,11 @@ export function useAcpStream(
   const [usage, setUsage] = useState<Usage | null>(null);
   const [models, setModels] = useState<ModelOption[]>([]);
   const [currentModel, setCurrentModel] = useState<string | null>(null);
-  const streaming = useRef(false);
+  // Un turno a medias sigue en el mismo mensaje: lo que llegue por el SSE se
+  // suma al último del agente en vez de abrir otro más abajo.
+  const streaming = useRef(
+    !!opts.enVuelo && initial[initial.length - 1]?.role === "assistant"
+  );
 
   useEffect(() => {
     const es = new EventSource(`/api/conversations/${encodeURIComponent(conversationId)}/events`);

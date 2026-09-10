@@ -521,7 +521,7 @@ class GooseSession extends EventEmitter {
       // al host en cada cambio de hilo es un segundo de peaje por nada.
       if (conexion) {
         this.setPhase("connecting");
-        await Promise.race([this.handshake(), this.timeoutDeConexion()]);
+        await this.handshakeConTope();
         return;
       }
       // El fallo de ciclo de vida SÍ se cuenta: antes iba sólo a console.warn y la UI pintaba
@@ -535,7 +535,7 @@ class GooseSession extends EventEmitter {
         });
       });
       this.setPhase("connecting");
-      await Promise.race([this.handshake(), this.timeoutDeConexion()]);
+      await this.handshakeConTope();
     } catch (e) {
       // Un handshake roto deja la conexión inservible: la próxima abre otra.
       soltarConexion();
@@ -560,7 +560,19 @@ class GooseSession extends EventEmitter {
     if (this.sessionId) this.resumeSessionId = this.sessionId;
     await ensureAgentBox().catch(() => {});
     this.setPhase("connecting");
-    await Promise.race([this.handshake(), this.timeoutDeConexion()]);
+    await this.handshakeConTope();
+  }
+
+  /** El handshake con tope. Si vence, se suelta la conexión compartida: un
+   *  socket abierto contra una caja que ya no contesta envenena a todos los
+   *  hilos siguientes, que se quedan otros 60 s en "despertando la caja". */
+  private async handshakeConTope() {
+    try {
+      await Promise.race([this.handshake(), this.timeoutDeConexion()]);
+    } catch (e) {
+      soltarConexion();
+      throw e;
+    }
   }
 
   private timeoutDeConexion(): Promise<never> {
@@ -907,7 +919,18 @@ class GooseSession extends EventEmitter {
       this.applyModelOptions(u.configOptions);
     } else if (u.sessionUpdate === "session_info_update" && u.title) {
       // El título es del agente: goose lo genera con un LLM leyendo los
-      // primeros mensajes y lo empuja por aquí. El Cliente sólo lo guarda.
+      // primeros mensajes y lo empuja por aquí. El Cliente sólo lo guarda,
+      // salvo cuando el agente tituló con la instrucción de idioma que le
+      // pegamos al primer turno: ahí manda lo que escribió el humano.
+      if (u.title.startsWith(IDIOMA.slice(0, 24))) {
+        const propio = this.messages.find((m) => m.role === "user")?.text?.trim();
+        if (propio) {
+          this.title = propio.slice(0, 60);
+          recordTitle(this.sessionId, this.title);
+          this.emit("event", { type: "title", title: this.title });
+          return;
+        }
+      }
       this.title = u.title;
       this.titleFromAgent = u.title;
       recordTitle(this.sessionId, u.title);
