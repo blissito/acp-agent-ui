@@ -13,6 +13,7 @@ import { MessageUsageStats } from "~/components/MessageUsageStats";
 import {
   Braces,
   CircleCheck,
+  CircleSlash,
   CircleX,
   Clock,
   Code,
@@ -123,6 +124,8 @@ const STATUS: Record<string, { Icon: LucideIcon; className: string; label: strin
   in_progress: { Icon: Loader2, className: "animate-spin text-text-info", label: "Ejecutando" },
   completed: { Icon: CircleCheck, className: "text-text-success", label: "Lista" },
   failed: { Icon: CircleX, className: "text-text-danger", label: "Falló" },
+  // El turno acabó sin que el agente dijera cómo terminó esta herramienta.
+  cancelled: { Icon: CircleSlash, className: "text-text-tertiary", label: "Sin cerrar" },
 };
 
 // Un icono por tipo de herramienta; lo desconocido cae en la llave inglesa.

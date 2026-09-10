@@ -659,6 +659,19 @@ class GooseSession extends EventEmitter {
     }
   }
 
+  /** Cierra las herramientas que quedaron a medias. Un turno cortado (o que
+   *  falla) deja `tool_call` sin su `tool_call_update` final, y el spinner de
+   *  esa fila giraría para siempre. */
+  private cerrarToolsPendientes(status: string) {
+    const last = this.messages[this.messages.length - 1];
+    if (last?.role !== "assistant") return;
+    for (const t of last.tools ?? []) {
+      if (t.status === "completed" || t.status === "failed") continue;
+      t.status = status;
+      this.emit("event", { type: "tool", id: t.id, status });
+    }
+  }
+
   /** Espera a que el turno en curso cierre. No falla nunca: si el agente no
    *  contesta a tiempo se sigue adelante, porque colgar la navegación sería
    *  peor que perder unas líneas. */
@@ -836,16 +849,26 @@ class GooseSession extends EventEmitter {
         await this.reabrirTrasSiesta();
         r = await correrTurno();
       }
-      this.messages.push({ role: "assistant", text: answer, at: Date.now() });
+      // El texto va al mismo turno que ya abrieron las herramientas: si se
+      // empuja uno nuevo, las tools se quedan colgando de un mensaje anterior
+      // y el turno se parte en dos en la pantalla.
+      const abierto = this.messages[this.messages.length - 1];
+      if (abierto?.role === "assistant" && !abierto.text) abierto.text = answer;
+      else this.messages.push({ role: "assistant", text: answer, at: Date.now() });
       this.updatedAt = Date.now();
+      // Ni "lista" ni "falló": el agente no dijo cómo acabó, y suponerlo sería
+      // inventar. Se marca como sin cerrar y el spinner para.
+      this.cerrarToolsPendientes("cancelled");
       this.emit("event", { type: "done", stopReason: r.stopReason, usage: turnUsage });
     })()
       .catch((e) => {
         // El agente suele cerrar el cancel con stopReason, pero algunos cortes
         // responden al prompt con error: eso no es una falla, es el cancel.
         if (this.cancelSolicitado) {
+          this.cerrarToolsPendientes("cancelled");
           this.emit("event", { type: "done", stopReason: "cancelled", usage: null });
         } else {
+          this.cerrarToolsPendientes("failed");
           this.emit("event", { type: "error", message: e.message });
         }
       })
