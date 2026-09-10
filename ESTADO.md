@@ -16,6 +16,7 @@ responde en markdown y reporta tokens y costo. Verificado el 31 de agosto con
 | SSE | `app/routes/api.conversations.$id.events.ts` | ✅ con latido cada 25 s |
 | Extensiones MCP | `app/.server/extensions.ts` + `/extensions` | ✅ sqlite, alta en caliente |
 | Agente | caja `goose-demo` (`sb_af93745a-…`), goose 1.48.0 | ✅ `goose-acp.service` |
+| Modelo | Sonnet 5 por `claude-acp` (suscripción, no API key) | ✅ con `GOOSE_MODE=approve` |
 | Repo | [blissito/acp-agent-ui](https://github.com/blissito/acp-agent-ui) | público |
 
 ## Para arrancar
@@ -61,9 +62,13 @@ desapareció del host sin aviso (404 "sandbox not found") mientras figuraba `run
   MCP http quedan en claro** en esa base.
 - **El permiso se auto-aprueba.** `session/request_permission` se acepta solo, en
   `app/.server/acp.ts`. Tema de la [sesión 4](docs/spec4-permisos-extensiones.md).
-- **El dev server se cayó dos veces en silencio** con cinco extensiones activas al reabrir un
-  hilo; con dos no pasa. Sin rastro en el log. El sospechoso es `npx -y @modelcontextprotocol/server-everything`,
-  que se descarga al arrancar. Sin investigar.
+- **`GOOSE_MODE=approve` no es opcional** con `claude-acp`. Sin él goose pide el modo
+  `bypassPermissions`, que el adaptador de Claude no ofrece, y todo turno muere con un
+  `Internal error` mudo. El motivo real vive en `/root/.local/state/goose/logs/cli/<fecha>/*.log`,
+  no en journald.
+- **El MCP http de EasyBits sólo funciona con `claude-acp`.** Con DeepSeek conectaba, no entregaba
+  ninguna tool al modelo y además tumbaba el proceso de la web. Mismo servidor y mismo token: la
+  diferencia era el provider. La credencial va en el query (`?token=`), no en `headers[]`.
 - **Los métodos son `_unstable`.** Todo lo que llene las vistas vacías lleva ese sufijo en goose:
   pueden cambiar sin aviso.
 

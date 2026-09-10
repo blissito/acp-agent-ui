@@ -55,14 +55,38 @@ listas porque no siempre coinciden.
 - **`mcp/hello.ts`** — un MCP en 60 líneas, sin dependencias: JSON-RPC por stdin y stdout. Corre en
   la caja sin banderas porque ahí hay Node 22.22, que borra los tipos solo.
 
-### Pendiente: el MCP http de EasyBits
+### El MCP http de EasyBits, y por qué no funcionaba
 
-Se conecta y el agente lo lista, pero entrega recursos y **ninguna** tool; por curl, el mismo
-endpoint devuelve 86. Pasa igual con 11 tools que con 75, así que no es el tamaño. Con la
-credencial en `headers[]` el agente ni la usa: arranca un flujo OAuth contra EasyBits (está en el
-journal de la caja). Con el token en `?token=` ya no hay OAuth y las tools siguen sin llegar. Un
-MCP http ajeno (`https://mcp.deepwiki.com/mcp`) funciona completo, así que el cableado del Cliente
-no es el problema.
+Costó media sesión y la culpa no era de donde parecía. Con goose sobre DeepSeek, el servidor de
+EasyBits conectaba y el agente lo listaba, pero al modelo no le llegaba **ninguna** tool —sólo los
+recursos `ui://easybits/*`— y de paso el proceso de la web se moría en silencio al abrir un hilo.
+Por curl, el mismo endpoint devolvía 86 tools. Daba igual pedir 11 que 75, así que no era el
+tamaño.
+
+Al cambiar el provider a `claude-acp` con Sonnet, el mismo servidor, la misma URL y el mismo token
+entregaron las 11 tools del toolset `web` y `web_search` corrió a la primera. El fallo estaba en
+el provider, no en el servidor MCP.
+
+Dos cosas que sí valen como regla:
+- **La credencial en `headers[]` no siempre viaja.** Con goose, en vez de usarla arrancó un flujo
+  OAuth contra EasyBits. Con el token en el query (`?token=`) funciona en los dos providers.
+- **Un MCP http ajeno** (`https://mcp.deepwiki.com/mcp`, sin credencial) sirve para descartar el
+  cableado propio en treinta segundos.
+
+### El modelo del agente: Sonnet por `claude-acp`
+
+La caja corre `claude-agent-acp` sobre la suscripción de Claude Code
+(`CLAUDE_CODE_OAUTH_TOKEN`), no una API key. Lo que costó encontrar: hace falta
+**`GOOSE_MODE=approve`**. Por omisión goose pide el modo `bypassPermissions`, que el adaptador de
+Claude no ofrece (`default, acceptEdits, plan, auto`), y el turno muere con un `Internal error`
+que no dice nada — el motivo real sólo aparece en
+`/root/.local/state/goose/logs/cli/<fecha>/*.log`.
+
+Efecto secundario que enlaza con la otra mitad de esta sesión: en modo `approve` el agente **pide
+permiso** antes de lo arriesgado, y la web todavía lo auto-aprueba.
+
+Con DeepSeek también hacía falta pegarle al primer turno la instrucción de idioma
+(`ACP_IDIOMA` en `acp.ts`): sin ella contestaba en chino.
 
 ## Lo que falta decidir
 
