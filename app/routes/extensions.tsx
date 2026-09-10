@@ -69,9 +69,12 @@ export default function Extensions() {
         )}
 
         <section className="mt-8">
-          <h2 className="mb-3 text-xs uppercase tracking-wide text-text-tertiary">
-            Declaradas aquí
+          <h2 className="text-xs uppercase tracking-wide text-text-tertiary">
+            Las que damos de alta
           </h2>
+          <p className="mb-3 mt-1 text-xs text-text-tertiary">
+            Viven en este cliente y se le mandan al agente cada vez que abre un hilo.
+          </p>
           {extensiones.length === 0 ? (
             <div className="flex flex-col items-center gap-3 rounded-xl border border-dashed border-border-primary px-6 py-12 text-center">
               <Puzzle className="h-8 w-8 text-text-tertiary" />
@@ -98,7 +101,7 @@ export default function Extensions() {
                   />
                   <button
                     onClick={() => void mutar({ intent: "delete", id: e.id })}
-                    className="text-text-tertiary transition-colors hover:text-red-500"
+                    className="cursor-pointer text-text-tertiary transition-colors hover:text-red-500"
                     title="Quitar"
                   >
                     <Trash2 className="h-4 w-4" />
@@ -114,16 +117,20 @@ export default function Extensions() {
         </section>
 
         <section className="mt-8">
-          <h2 className="mb-3 text-xs uppercase tracking-wide text-text-tertiary">
-            Lo que el agente reporta
+          <h2 className="text-xs uppercase tracking-wide text-text-tertiary">
+            Conectadas ahora mismo
           </h2>
+          <p className="mb-3 mt-1 text-xs text-text-tertiary">
+            Esto lo contesta el agente sobre el hilo que tienes abierto, y suma las que trae de
+            fábrica. La lista de arriba es lo que pedimos; ésta es lo que hay.
+          </p>
           {reportadas.error ? (
             <p className="rounded-xl border border-border-primary px-4 py-3 text-sm text-text-secondary">
               {reportadas.error}
             </p>
           ) : reportadas.extensions.length === 0 ? (
             <p className="rounded-xl border border-border-primary px-4 py-3 text-sm text-text-secondary">
-              Abre un hilo para que haya a quién preguntarle.
+              Sin un hilo abierto no hay a quién preguntarle: entra al chat y vuelve.
             </p>
           ) : (
             <ul className="flex flex-col gap-2">
@@ -161,6 +168,21 @@ function Formulario({ onCrear }: { onCrear: (body: Record<string, unknown>) => v
   const [command, setCommand] = useState("/usr/local/bin/node");
   const [args, setArgs] = useState("");
   const [url, setUrl] = useState("");
+  // Un renglón por variable, `NOMBRE=valor`. Es el formato que ya se conoce de
+  // un .env: nadie tiene que aprender otra sintaxis para pegar un token.
+  const [pares, setPares] = useState("");
+
+  const aParejas = (texto: string) =>
+    texto
+      .split("\n")
+      .map((l) => l.trim())
+      .filter(Boolean)
+      .map((l) => {
+        const corte = l.indexOf("=");
+        return corte === -1
+          ? { name: l, value: "" }
+          : { name: l.slice(0, corte).trim(), value: l.slice(corte + 1).trim() };
+      });
 
   const campo =
     "w-full rounded-lg border border-border-primary bg-transparent px-3 py-2 text-sm text-text-primary placeholder:text-text-tertiary focus:outline-none focus:ring-1 focus:ring-border-secondary";
@@ -172,10 +194,10 @@ function Formulario({ onCrear }: { onCrear: (body: Record<string, unknown>) => v
           <button
             key={t}
             onClick={() => setTransport(t)}
-            className={`rounded-lg px-3 py-1 font-mono text-xs transition-colors ${
+            className={`cursor-pointer rounded-lg border px-3 py-1 font-mono text-xs transition-colors ${
               transport === t
-                ? "bg-surface-secondary text-text-primary"
-                : "text-text-tertiary hover:text-text-secondary"
+                ? "border-border-secondary bg-background-secondary text-text-primary"
+                : "border-transparent text-text-tertiary hover:text-text-secondary"
             }`}
           >
             {t}
@@ -218,6 +240,22 @@ function Formulario({ onCrear }: { onCrear: (body: Record<string, unknown>) => v
         />
       )}
 
+      <textarea
+        className={`${campo} min-h-[72px] font-mono`}
+        placeholder={
+          transport === "stdio"
+            ? "variables de entorno (opcional)\nAPI_KEY=abc123"
+            : "cabeceras (opcional)\nAuthorization=Bearer abc123"
+        }
+        value={pares}
+        onChange={(e) => setPares(e.target.value)}
+      />
+      <p className="text-xs text-text-tertiary">
+        {transport === "stdio"
+          ? "Se le pasan al proceso como variables de entorno."
+          : "Van en cada petición al servidor. Quedan guardadas en claro en la base de este cliente."}
+      </p>
+
       <button
         onClick={() => {
           onCrear({
@@ -226,13 +264,16 @@ function Formulario({ onCrear }: { onCrear: (body: Record<string, unknown>) => v
             command,
             args: args.split(" ").filter(Boolean),
             url,
+            env: transport === "stdio" ? aParejas(pares) : [],
+            headers: transport === "http" ? aParejas(pares) : [],
           });
           setName("");
           setArgs("");
           setUrl("");
+          setPares("");
         }}
         disabled={!name}
-        className="self-start rounded-lg bg-surface-secondary px-4 py-2 text-sm text-text-primary transition-opacity hover:opacity-80 disabled:opacity-40"
+        className="cursor-pointer self-start rounded-lg bg-background-inverse px-4 py-2 text-sm text-text-inverse transition-opacity hover:opacity-80 disabled:cursor-not-allowed disabled:opacity-40"
       >
         Dar de alta
       </button>

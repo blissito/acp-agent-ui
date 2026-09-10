@@ -622,6 +622,25 @@ class GooseSession extends EventEmitter {
     }
   }
 
+  /** Espera a que el turno en curso cierre. No falla nunca: si el agente no
+   *  contesta a tiempo se sigue adelante, porque colgar la navegación sería
+   *  peor que perder unas líneas. */
+  private esperarTurno(ms: number): Promise<void> {
+    if (!this.busy) return Promise.resolve();
+    return new Promise((resolve) => {
+      const listo = () => {
+        clearTimeout(t);
+        this.off("event", alEvento);
+        resolve();
+      };
+      const alEvento = (e: AcpEvent) => {
+        if (e.type === "done" || e.type === "error") listo();
+      };
+      const t = setTimeout(listo, ms);
+      this.on("event", alEvento);
+    });
+  }
+
   // El selector de modelo que ACP publica como session config option
   // (categoría "model", tipo "select"). Aquí se lee y se vuelve a leer
   // después de cambiarlo, porque el agente responde con la lista actualizada.
@@ -824,6 +843,19 @@ class GooseSession extends EventEmitter {
    *  y no se entera de que el socket murió: sin `session/close` la caja se queda
    *  con la sesión ocupada y a las cuatro empieza a rechazar conexiones. */
   close(): Promise<void> {
+    if (this.closed) return Promise.resolve();
+
+    // Un turno en vuelo se corta primero y se espera a que cierre: así lo que
+    // el agente llevaba escrito queda guardado en el hilo. Cerrar de golpe lo
+    // tira, y al volver la conversación aparece sin respuesta.
+    if (this.busy && this.ready) {
+      this.cancelar();
+      return this.esperarTurno(3000).then(() => this.cerrarDeVerdad());
+    }
+    return this.cerrarDeVerdad();
+  }
+
+  private cerrarDeVerdad(): Promise<void> {
     if (this.closed) return Promise.resolve();
     this.closed = true;
     if (this.idleTimer) clearTimeout(this.idleTimer);

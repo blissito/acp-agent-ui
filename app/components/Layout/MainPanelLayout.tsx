@@ -9,8 +9,11 @@ export function MainPanelLayout({
 }) {
   return (
     <div className="h-dvh">
+      {/* El scroll vive aquí y no en cada vista: sin él, todo lo que pase del
+          alto de la ventana se recorta en silencio. El chat no se entera,
+          porque su lista tiene su propio scroller acotado. */}
       <div
-        className={`flex h-full min-h-0 min-w-0 flex-1 flex-col bg-background-primary ${
+        className={`flex h-full min-h-0 min-w-0 flex-1 flex-col overflow-y-auto bg-background-primary ${
           removeTopPadding ? "" : "pt-[32px]"
         }`}
       >
