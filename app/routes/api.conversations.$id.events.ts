@@ -14,6 +14,16 @@ export async function loader({ params, request }: Route.LoaderArgs) {
 
   const encoder = new TextEncoder();
   let unsubscribe: (() => void) | null = null;
+  // El navegador que se va dispara `abort` y `cancel`, los dos. Sin esta
+  // guarda el contador de streams baja el doble y la caja se echa a dormir
+  // con pestañas abiertas: la siguiente pregunta paga el despertar entero.
+  let cerrado = false;
+  const soltar = () => {
+    if (cerrado) return;
+    cerrado = true;
+    unsubscribe?.();
+    closeSse();
+  };
 
   const stream = new ReadableStream({
     start(controller) {
@@ -43,16 +53,14 @@ export async function loader({ params, request }: Route.LoaderArgs) {
 
       request.signal.addEventListener("abort", () => {
         clearInterval(beat);
-        unsubscribe?.();
-        closeSse();
+        soltar();
         try {
           controller.close();
         } catch {}
       });
     },
     cancel() {
-      unsubscribe?.();
-      closeSse();
+      soltar();
     },
   });
 

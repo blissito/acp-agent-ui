@@ -54,6 +54,9 @@ const IDLE_MS = Number(process.env.ACP_IDLE_MS ?? 15 * 60 * 1000);
 // concretos, así que un .env a medias operaba recursos ajenos. Sin ellos esto es un cliente ACP
 // normal y el ciclo de vida simplemente no corre.
 const AGENT_BOX = process.env.AGENT_BOX_ID ?? "";
+/** Tope de cada llamada REST al host, y de esperar a que la caja arranque. */
+const REST_TIMEOUT_MS = Number(process.env.ACP_REST_TIMEOUT_MS ?? 10_000);
+const WAKE_TIMEOUT_MS = Number(process.env.ACP_WAKE_TIMEOUT_MS ?? 45_000);
 const AGENT_SNAPSHOT = process.env.AGENT_SNAPSHOT_ID ?? "";
 const EB_KEY =
   process.env.EASYBITS_API_KEY ??
@@ -93,18 +96,24 @@ export async function ensureAgentBox() {
     console.warn("[lifecycle] sin SDK — no gestiono ciclo de vida");
     return null;
   }
-  const sb = await eb.sandboxes.get(AGENT_BOX);
-  await sb.refresh();
+  // Cada llamada al host lleva tope. Sin él, un REST que no contesta deja la
+  // pantalla en "despertando la caja" durante minutos, y el tope del handshake
+  // ni siquiera llega a contar porque esto pasa antes.
+  const sb: any = await conTimeout(eb.sandboxes.get(AGENT_BOX), REST_TIMEOUT_MS);
+  await conTimeout(sb.refresh(), REST_TIMEOUT_MS);
   console.log(`[lifecycle] caja agente status=${sb.status}`);
   if (sb.status === "running") {
-    await sb.extend(3600).catch((e: Error) =>
+    // Extender el TTL no es requisito para hablar con el agente: va suelto,
+    // sin hacer esperar a nadie. (Y `POST /extend` sabe dar 500 en una caja
+    // con el TTL vencido.)
+    void sb.extend(3600).catch((e: Error) =>
       console.warn("[lifecycle] extend falló:", e.message)
     );
     return sb;
   }
-  if (sb.status === "suspended") await sb.resume().catch(() => {});
+  if (sb.status === "suspended") await conTimeout(sb.resume(), REST_TIMEOUT_MS).catch(() => {});
   try {
-    await sb.waitUntilReady(90_000);
+    await sb.waitUntilReady(WAKE_TIMEOUT_MS);
     console.log("[lifecycle] caja despierta");
     return sb;
   } catch {
@@ -121,7 +130,7 @@ export async function ensureAgentBox() {
   }
   console.warn("[lifecycle] caja perdida; self-heal desde snapshot");
   const [child] = await eb.sandboxes.forkFromSnapshot(AGENT_SNAPSHOT, {});
-  await child.waitUntilReady(90_000);
+  await child.waitUntilReady(WAKE_TIMEOUT_MS);
   console.warn(
     `[lifecycle] caja recreada (${child.id}) — ⚠️ su URL es otra: actualiza ACP_WS_URL o seguirás hablando con la anterior`
   );
@@ -527,7 +536,10 @@ class GooseSession extends EventEmitter {
       // El fallo de ciclo de vida SÍ se cuenta: antes iba sólo a console.warn y la UI pintaba
       // "Despertando la caja" en verde aunque no se hubiera despertado nada, así que el
       // siguiente error parecía venir de otro sitio.
-      await ensureAgentBox().catch((e) => {
+      // Techo de toda la fase, no sólo de cada llamada: despertar la caja es
+      // un favor, no un requisito. Si tarda más que esto se intenta conectar
+      // igual, porque muchas veces ya estaba arriba.
+      await conTimeout(ensureAgentBox(), WAKE_TIMEOUT_MS + REST_TIMEOUT_MS).catch((e) => {
         console.warn("[lifecycle] ensureAgentBox:", e.message);
         this.emit("event", {
           type: "warning",
@@ -558,7 +570,7 @@ class GooseSession extends EventEmitter {
     // El hilo sigue en el sessions.db de la caja: se reabre por id en vez de
     // empezar uno nuevo, y así el agente no pierde lo hablado.
     if (this.sessionId) this.resumeSessionId = this.sessionId;
-    await ensureAgentBox().catch(() => {});
+    await conTimeout(ensureAgentBox(), WAKE_TIMEOUT_MS + REST_TIMEOUT_MS).catch(() => {});
     this.setPhase("connecting");
     await this.handshakeConTope();
   }
@@ -1454,9 +1466,11 @@ export const markActivity = () => (lastActivity = Date.now());
 export const openSse = () => {
   activeSse++;
   markActivity();
+  if (process.env.ACP_DEBUG_SSE) console.log("[sse] abiertos:", activeSse);
 };
 export const closeSse = () => {
   activeSse = Math.max(0, activeSse - 1);
+  if (process.env.ACP_DEBUG_SSE) console.log("[sse] abiertos:", activeSse);
 };
 
 setInterval(() => {
