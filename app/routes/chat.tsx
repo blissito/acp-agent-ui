@@ -249,7 +249,7 @@ function HiloNoDisponible({ mensaje }: { mensaje: string }) {
 
 function ChatView() {
   const { id, cwd, messages, error: loadError } = useLoaderData<typeof loader>();
-  const { turns, busy, connected, phase, error, notice, send, models, currentModel, setModel } = useAcpStream(
+  const { turns, busy, connected, phase, error, notice, send, stop, models, currentModel, setModel } = useAcpStream(
     id,
     messages as Turn[]
   );
@@ -330,6 +330,7 @@ function ChatView() {
           <ChatInputCard>
             <ChatInput
               onSubmit={send}
+              onStop={() => void stop()}
               busy={busy}
               workingDir={cwd}
               withImages

@@ -410,6 +410,8 @@ class GooseSession extends EventEmitter {
   /** El nombre que el agente tiene guardado, para no pisarlo si es de verdad. */
   titleFromAgent: string | null = null;
   private replaying = false;
+  /** El humano pidió cortar el turno; un error de cierre se cuenta como cancel. */
+  private cancelSolicitado = false;
   busy = false;
   ready = false;
   closed = false;
@@ -584,6 +586,21 @@ class GooseSession extends EventEmitter {
     this.pump();
   }
 
+  /** Corta el turno en curso. `session/cancel` es notificación: no hay
+   *  respuesta; el corte se ve cuando el agente cierra el turno (y el pump
+   *  emite `done`). Si el agente contesta con error, se cuenta como cancel. */
+  cancelar() {
+    if (!this.busy || !this.sessionId || !this.conn) return;
+    this.cancelSolicitado = true;
+    try {
+      const agente = this.conn.agent;
+      const notify = agente?.notify ?? agente?.sendNotification;
+      notify?.call(agente, "session/cancel", { sessionId: this.sessionId });
+    } catch (e) {
+      console.warn("[cancel]", (e as Error).message);
+    }
+  }
+
   // El selector de modelo que ACP publica como session config option
   // (categoría "model", tipo "select"). Aquí se lee y se vuelve a leer
   // después de cambiarlo, porque el agente responde con la lista actualizada.
@@ -744,8 +761,17 @@ class GooseSession extends EventEmitter {
       this.updatedAt = Date.now();
       this.emit("event", { type: "done", stopReason: r.stopReason, usage: turnUsage });
     })()
-      .catch((e) => this.emit("event", { type: "error", message: e.message }))
+      .catch((e) => {
+        // El agente suele cerrar el cancel con stopReason, pero algunos cortes
+        // responden al prompt con error: eso no es una falla, es el cancel.
+        if (this.cancelSolicitado) {
+          this.emit("event", { type: "done", stopReason: "cancelled", usage: null });
+        } else {
+          this.emit("event", { type: "error", message: e.message });
+        }
+      })
       .finally(() => {
+        this.cancelSolicitado = false;
         this.busy = false;
         this.pump();
       });
@@ -934,6 +960,15 @@ export function askConversation(id: string, text: string, images: ImagePayload[]
   return true;
 }
 
+/** Pide al agente que corte el turno en curso (`session/cancel`). */
+export function cancelarTurno(id: string) {
+  if (!esElActual(id)) return false;
+  actual!.cancelar();
+  markActivity();
+  invalidarLista();
+  return true;
+}
+
 export async function setModel(id: string, value: string) {
   preferredModel = value;
   guardarModelos();
@@ -1067,9 +1102,21 @@ export async function listAgentSessions(): Promise<any> {
   if (!s) return { error: "sin sesión abierta" };
   const caps = s.agentCapabilities;
   if (caps && !caps.sessionCapabilities?.list) return { sessions: [] };
+  // Socket ya cerrado → la caja se durmió; preguntar colgaría 15 s. La copia
+  // guardada sirve mientras tanto y abrir un hilo reconecta y despierta.
+  if ((conexion?.socket?.readyState ?? 1) !== 1) {
+    return { error: "sin conexión con la caja" };
+  }
   try {
     return await conTimeout((s as any).conn.agent.request("session/list", {}), 15_000);
   } catch (e) {
+    // La caja se suspendió sin avisar: la conexión quedó half-open y toda
+    // petición esperaría el timeout. Se entierra la sesión y se suelta la
+    // conexión: la pantalla se sirve de la copia guardada y el próximo uso
+    // reconecta (y despierta) solo.
+    if (sesionActual() === s) actual = null;
+    soltarConexion();
+    void s.close();
     return { error: (e as Error).message };
   }
 }

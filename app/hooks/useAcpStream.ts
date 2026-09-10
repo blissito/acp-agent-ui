@@ -168,5 +168,13 @@ export function useAcpStream(
     [conversationId]
   );
 
-  return { turns, busy, connected, phase, error, notice, usage, models, currentModel, setModel, send };
+  /** Botón de parar: corta el turno; el agente cierra con `done`.
+   *  La UI no se limpia aquí sino cuando llega ese evento por SSE. */
+  const stop = useCallback(async () => {
+    await fetch(`/api/conversations/${encodeURIComponent(conversationId)}/cancel`, {
+      method: "POST",
+    });
+  }, [conversationId]);
+
+  return { turns, busy, connected, phase, error, notice, usage, models, currentModel, setModel, send, stop };
 }
