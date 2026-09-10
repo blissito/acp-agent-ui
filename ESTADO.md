@@ -14,6 +14,7 @@ responde en markdown y reporta tokens y costo. Verificado el 31 de agosto con
 | Interfaz | la raíz de este repo | ✅ SSR, 9 rutas |
 | Motor ACP | `app/.server/acp.ts` | ✅ una conexión por conversación |
 | SSE | `app/routes/api.conversations.$id.events.ts` | ✅ con latido cada 25 s |
+| Extensiones MCP | `app/.server/extensions.ts` + `/extensions` | ✅ sqlite, alta en caliente |
 | Agente | caja `goose-demo` (`sb_af93745a-…`), goose 1.48.0 | ✅ `goose-acp.service` |
 | Repo | [blissito/acp-agent-ui](https://github.com/blissito/acp-agent-ui) | público |
 
@@ -53,9 +54,16 @@ desapareció del host sin aviso (404 "sandbox not found") mientras figuraba `run
   Vale la pena subir la versión para dejar de leer el aviso.
 - **Nada se persiste.** Las conversaciones viven en un `Map` del proceso: reiniciar el server las
   borra. Es justo el tema de la [sesión 3](docs/spec3-revivir.md).
+- **La primera base de datos del repo.** Las extensiones MCP viven en sqlite
+  (`.data/extensions.db`, movible con `ACP_EXTENSIONS_DB`); los hilos, los títulos y los modelos
+  siguen en JSON plano. El alta se aplica en caliente con
+  `_goose/unstable/session/extensions/add`: no hace falta reabrir el hilo. Ojo: **los tokens de un
+  MCP http quedan en claro** en esa base.
 - **El permiso se auto-aprueba.** `session/request_permission` se acepta solo, en
   `app/.server/acp.ts`. Tema de la [sesión 4](docs/spec4-permisos-extensiones.md).
-- **El botón de parar no interrumpe.** Está dibujado; falta `session/cancel`.
+- **El dev server se cayó dos veces en silencio** con cinco extensiones activas al reabrir un
+  hilo; con dos no pasa. Sin rastro en el log. El sospechoso es `npx -y @modelcontextprotocol/server-everything`,
+  que se descarga al arrancar. Sin investigar.
 - **Los métodos son `_unstable`.** Todo lo que llene las vistas vacías lleva ese sufijo en goose:
   pueden cambiar sin aviso.
 

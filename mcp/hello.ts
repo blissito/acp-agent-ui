@@ -9,7 +9,7 @@
  *   echo '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' | node mcp/hello.ts
  */
 
-type Request = { jsonrpc: "2.0"; id?: number | string; method: string; params?: any };
+type RpcRequest = { jsonrpc: "2.0"; id?: number | string; method: string; params?: any };
 
 const TOOLS = [
   {
@@ -24,11 +24,11 @@ const TOOLS = [
 ];
 
 /** La respuesta viaja en una sola línea: el marco de MCP por stdio es JSON por renglón. */
-function responder(id: Request["id"], result: unknown) {
+function responder(id: RpcRequest["id"], result: unknown) {
   process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id, result }) + "\n");
 }
 
-function atender(req: Request) {
+function atender(req: RpcRequest) {
   switch (req.method) {
     case "initialize":
       return responder(req.id, {

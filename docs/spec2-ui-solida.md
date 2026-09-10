@@ -78,9 +78,9 @@ El navegador nunca habla ACP. El `EventSource` recibe eventos ya traducidos
 Las cinco últimas están en cascarón a propósito, y completarlas es más barato de lo que parece:
 **todas se llenan por ACP**, con métodos de extensión sobre la conexión que ya existe.
 
-| Vista | Métodos (`goose.*_unstable`) |
+| Vista | Métodos (bajo `_goose/unstable/`) |
 |---|---|
-| Extensiones | `configExtensionsList` · `Add` · `Remove` · `SetEnabled` |
+| Extensiones | `session/extensions/list` · `add` · `remove` (hecho en la sesión 4) |
 | Agenda | `schedulesList` · `Create` · `Delete` · `Pause` · `RunNow` |
 | Recetas | `recipesList` · `Save` · `Delete` · `Parse` · `Encode` |
 | Habilidades | `sourcesList` |

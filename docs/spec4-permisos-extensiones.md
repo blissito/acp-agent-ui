@@ -13,9 +13,12 @@ preguntar son la misma conversación.
 
 ## Lo que ya existe
 
-- **Las extensiones se manejan por ACP**: `goose.configExtensionsList_unstable`, más `Add`,
-  `Remove` y `SetEnabled`. Hoy el `initialize` manda `mcpServers: []`, o sea el agente arranca sin
-  ninguna.
+- **Las extensiones ya se dan de alta desde la web** (hecho el 10 de septiembre; ver "Lo que se
+  construyó"). El handshake manda las declaradas y el alta se aplica en caliente.
+- **Los métodos del agente no son los que decía este archivo.** `goose.configExtensionsList_unstable`
+  no existe: los reales son `_goose/unstable/session/extensions/list`, `/add` y `/remove` para la
+  sesión viva, y `_goose/unstable/config/extensions/list|add|remove|set` para la configuración
+  global. Salieron de leer los literales del binario en la caja, no de la documentación.
 - **El permiso ya viaja.** `session/request_permission` llega hoy al backend, se emite por el SSE
   como `event: tool`… y se **auto-aprueba** en `app/.server/acp.ts`. El camino de ida está; falta
   el de vuelta.
@@ -24,11 +27,42 @@ preguntar son la misma conversación.
 
 ## Lo que hay que hacer
 
-1. Conectarle una extensión MCP desde `/extensions`, para que tenga algo que pedir permiso de usar.
+1. ~~Conectarle una extensión MCP desde `/extensions`~~ — hecho.
 2. Quitar la auto-aprobación: que el turno **espere** la respuesta del humano.
 3. Un canal de decisión que no sea la web (el mismo `optionId` que ya se emite).
 4. El webhook de WhatsApp como segundo cliente del mismo motor.
 5. Que la web y WhatsApp vean la misma conversación.
+
+## Lo que se construyó (10 sep)
+
+Una extensión pasa por dos lugares distintos, y ésa es la lección de la sesión: la tabla guarda lo
+que el Cliente **declara**; el Agente reporta lo que tiene **conectado**. La vista enseña las dos
+listas porque no siempre coinciden.
+
+- **`app/.server/extensions.ts`** — la primera base de datos del repo, sqlite con `node:sqlite`,
+  una tabla y sin ORM. Los hilos, los títulos y los modelos siguen en JSON plano: una extensión
+  entra ahí porque se prende, se apaga y se borra de una en una. La ruta la manda
+  `ACP_EXTENSIONS_DB`, y al hostear la app hay que apuntarla a `/data`.
+- **El envoltorio de goose.** `session/extensions/add` no pide el `McpServer` de ACP pelado, sino
+  un `GooseExtension::Mcp` que lo lleva dentro del campo `server`.
+- **stdio no lleva discriminador.** En el esquema de ACP, `http`, `sse` y `acp` exigen `type`;
+  stdio es la única variante sin él. Agregárselo "para que quede parejo" rompe `session/new` con
+  un error de deserialización que no dice nada.
+- **En `session/load` los servidores se suman** a los que el agente ya guardó para ese hilo: un
+  hilo revivido puede traer una extensión que en la tabla ya se borró.
+- **Una extensión rota no se lleva el chat.** Si la sesión no arranca con ellas, se reabre sin
+  ninguna y se avisa por el SSE.
+- **`mcp/hello.ts`** — un MCP en 60 líneas, sin dependencias: JSON-RPC por stdin y stdout. Corre en
+  la caja sin banderas porque ahí hay Node 22.22, que borra los tipos solo.
+
+### Pendiente: el MCP http de EasyBits
+
+Se conecta y el agente lo lista, pero entrega recursos y **ninguna** tool; por curl, el mismo
+endpoint devuelve 86. Pasa igual con 11 tools que con 75, así que no es el tamaño. Con la
+credencial en `headers[]` el agente ni la usa: arranca un flujo OAuth contra EasyBits (está en el
+journal de la caja). Con el token en `?token=` ya no hay OAuth y las tools siguen sin llegar. Un
+MCP http ajeno (`https://mcp.deepwiki.com/mcp`) funciona completo, así que el cableado del Cliente
+no es el problema.
 
 ## Lo que falta decidir
 
