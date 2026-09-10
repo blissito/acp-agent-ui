@@ -22,7 +22,7 @@ export async function action({ request, params }: Route.ActionArgs) {
       )
     : [];
   if (!text && images.length === 0) return data({ error: "no content" }, { status: 400 });
-  const ok = askConversation(params.id, text, images);
-  if (!ok) return data({ error: "conversation not found" }, { status: 404 });
+  const ok = await askConversation(params.id, text, images);
+  if (!ok) return data({ error: "no pude abrir el hilo para mandar el mensaje" }, { status: 502 });
   return data({ queued: true });
 }

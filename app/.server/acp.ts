@@ -1081,8 +1081,18 @@ export function getMessages(id: string): StoredMessage[] {
   return esElActual(id) ? (actual?.messages ?? []) : [];
 }
 
-export function askConversation(id: string, text: string, images: ImagePayload[] = []) {
-  if (!esElActual(id)) return false;
+export async function askConversation(id: string, text: string, images: ImagePayload[] = []) {
+  // Mandar un mensaje a un hilo que ya no está vivo lo reabre. Antes devolvía
+  // 404 y el navegador se quedaba enseñando un mensaje que nadie recibió: la
+  // caja se había dormido entre que se leyó la página y se pulsó enviar.
+  if (!esElActual(id)) {
+    try {
+      await abrirHilo(id);
+    } catch {
+      return false;
+    }
+    if (!esElActual(id)) return false;
+  }
   actual!.ask(text, images);
   markActivity();
   invalidarLista();

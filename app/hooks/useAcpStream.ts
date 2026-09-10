@@ -142,15 +142,26 @@ export function useAcpStream(
 
   const send = useCallback(
     async (text: string, images: ImagePayload[] = []) => {
-      setTurns((prev) => [...prev, { role: "user", text, images }]);
+      const mio: Turn = { role: "user", text, images };
+      setTurns((prev) => [...prev, mio]);
       setBusy(true);
+      setError(null);
       streaming.current = false;
 
-      await fetch(`/api/conversations/${encodeURIComponent(conversationId)}/messages`, {
+      const r = await fetch(`/api/conversations/${encodeURIComponent(conversationId)}/messages`, {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ text, images }),
       });
+
+      // Si el servidor no lo aceptó, se quita de la pantalla: dejarlo ahí
+      // hace creer que el agente lo recibió y al recargar desaparece solo.
+      if (!r.ok) {
+        setTurns((prev) => prev.filter((t) => t !== mio));
+        setBusy(false);
+        const msg = await r.json().catch(() => null);
+        setError(msg?.error ?? "no se pudo enviar el mensaje");
+      }
     },
     [conversationId]
   );
