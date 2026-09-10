@@ -174,7 +174,34 @@ export interface StoredMessage {
   role: "user" | "assistant";
   text: string;
   images?: ImagePayload[];
+  /** Las herramientas que usó el agente en este turno. Se guardan aquí y no
+   *  sólo se emiten al vivo: si no, al reabrir el hilo la conversación
+   *  aparece sin rastro de lo que el agente hizo. */
+  tools?: ToolEntry[];
   at: number;
+}
+
+export interface ToolEntry {
+  id: string;
+  title?: string;
+  kind?: string;
+  status?: string;
+  path?: string;
+}
+
+/** Mete o actualiza una herramienta en el último turno del agente. Llega
+ *  varias veces con el mismo id: `tool_call` la crea y `tool_call_update` la
+ *  avanza, con sólo los campos que cambiaron. */
+export function upsertTool(msgs: StoredMessage[], entry: ToolEntry) {
+  let last = msgs[msgs.length - 1];
+  if (last?.role !== "assistant") {
+    last = { role: "assistant", text: "", at: Date.now() };
+    msgs.push(last);
+  }
+  const tools = (last.tools ??= []);
+  const i = tools.findIndex((t) => t.id === entry.id);
+  if (i === -1) tools.push(entry);
+  else tools[i] = { ...tools[i], ...entry };
 }
 
 /** Dobla un `session/update` de replay dentro de una lista de mensajes.
@@ -194,6 +221,16 @@ export function applyReplayChunk(msgs: StoredMessage[], u: any): boolean {
   const txt = c.text ?? "";
   if (u?.sessionUpdate === "user_message_chunk" && txt) {
     msgs.push({ role: "user", text: txt, at: Date.now() });
+    return true;
+  }
+  if (u?.sessionUpdate === "tool_call" || u?.sessionUpdate === "tool_call_update") {
+    const entry: ToolEntry = { id: u.toolCallId };
+    if (u.title) entry.title = u.title;
+    if (u.kind) entry.kind = u.kind;
+    if (u.status) entry.status = u.status;
+    const path = u.locations?.[0]?.path;
+    if (path) entry.path = path;
+    upsertTool(msgs, entry);
     return true;
   }
   if (u?.sessionUpdate === "agent_message_chunk" && txt) {
@@ -764,6 +801,8 @@ class GooseSession extends EventEmitter {
           if (u.status) ev.status = u.status;
           const path = u.locations?.[0]?.path;
           if (path) ev.path = path;
+          const { type: _t, ...entry } = ev;
+          upsertTool(this.messages, entry as ToolEntry);
           this.emit("event", ev);
         } else if (u.sessionUpdate === "config_option_update") {
           this.applyModelOptions(u.configOptions);

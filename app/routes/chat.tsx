@@ -32,10 +32,16 @@ import { ConnectingState } from "~/components/ConnectingState";
 import { useAcpStream, type ConnectPhase, type ToolEntry, type Turn } from "~/hooks/useAcpStream";
 import { abrirHilo, config, getMessages } from "~/.server/acp";
 
-const plano = (m: { role: "user" | "assistant"; text: string; images?: any[] }) => ({
+const plano = (m: {
+  role: "user" | "assistant";
+  text: string;
+  images?: any[];
+  tools?: any[];
+}) => ({
   role: m.role,
   text: m.text,
   images: m.images,
+  tools: m.tools,
 });
 
 export async function loader({ params }: Route.LoaderArgs) {
