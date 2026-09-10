@@ -14,6 +14,7 @@ export default [
   route("api/conversations/:id/cancel", "routes/api.conversations.$id.cancel.ts"),
   route("api/conversations/:id/model", "routes/api.conversations.$id.model.ts"),
   route("api/agent-sessions", "routes/api.agent-sessions.ts"),
+  route("api/extensions", "routes/api.extensions.ts"),
 
   layout("routes/_shell.tsx", [
     index("routes/hub.tsx"),

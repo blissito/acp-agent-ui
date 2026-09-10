@@ -11,6 +11,7 @@ import { EventEmitter } from "node:events";
 import { client } from "@agentclientprotocol/sdk";
 import { createWebSocketStream } from "@agentclientprotocol/sdk/experimental/ws-client";
 import { WebSocket } from "ws";
+import { mcpServersParaAcp, type Extension, aMcpServer } from "./extensions";
 import type { ConnectPhase, ImagePayload, ModelOption } from "~/hooks/useAcpStream";
 
 // Sin URL no se inventa una: un fallback hardcodeado manda la sesión a la caja de otro y el
@@ -538,6 +539,11 @@ class GooseSession extends EventEmitter {
 
     this.setPhase("session");
     const ctx = conn.agent;
+    // Las extensiones se resuelven una vez por handshake. El log no es adorno:
+    // es la única prueba de que el Cliente mandó lo que cree que mandó, antes
+    // de ponerse a buscar herramientas nuevas en el chat.
+    const servidores = mcpServersParaAcp();
+    console.log("[acp] mcpServers:", servidores.map((m: any) => m.name).join(", ") || "(ninguno)");
     if (this.resumeSessionId) {
       // El agente repite el hilo como notificaciones `session/update` ANTES de
       // responder a esta petición; por eso la bandera se baja después.
@@ -549,7 +555,10 @@ class GooseSession extends EventEmitter {
       await ctx.request("session/load", {
         sessionId: this.resumeSessionId,
         cwd: this.cwd,
-        mcpServers: [],
+        // En `session/load` los servidores se SUMAN a los que el Agente ya
+        // guardó para este hilo: por eso un hilo revivido puede traer una
+        // extensión que aquí ya se borró.
+        mcpServers: servidores,
         ...(REPLAY_TAIL ? { _meta: { replayTail: REPLAY_TAIL } } : {}),
       });
       this.replaying = false;
@@ -560,7 +569,19 @@ class GooseSession extends EventEmitter {
       this.title = pickTitle(this.sessionId, this.messages, this.titleFromAgent);
       recordTitle(this.sessionId, this.title);
     } else {
-      this.session = await ctx.buildSession({ cwd: this.cwd, mcpServers: [] }).start();
+      try {
+        this.session = await ctx.buildSession({ cwd: this.cwd, mcpServers: servidores }).start();
+      } catch (e) {
+        // Una extensión mal escrita no puede llevarse por delante el chat: si
+        // la sesión no arranca con ellas, se abre sin ninguna y se avisa.
+        if (!servidores.length) throw e;
+        console.warn("[acp] la sesión no arrancó con extensiones:", (e as Error).message);
+        this.emit("event", {
+          type: "error",
+          message: `No pude arrancar con las extensiones (${(e as Error).message}). El hilo abre sin ellas.`,
+        });
+        this.session = await ctx.buildSession({ cwd: this.cwd, mcpServers: [] }).start();
+      }
       this.sessionId = this.session.sessionId;
     }
     this.ready = true;
@@ -1300,3 +1321,86 @@ setInterval(() => {
   }
 }, 30_000).unref?.();
 
+
+// ---------------------------------------------------------------------------
+// Extensiones MCP
+//
+// Dos verdades distintas, y ésa es la lección de la sesión 4: la base sqlite
+// guarda lo que este Cliente DECLARA; el Agente reporta lo que tiene
+// CONECTADO. No siempre coinciden, y el juez final es preguntarle al agente
+// qué herramientas ve.
+// ---------------------------------------------------------------------------
+
+export interface AgentExtension {
+  name: string;
+  description: string;
+  /** platform/builtin son las que trae el binario; mcp, las que conectamos. */
+  kind: string;
+  propia: boolean;
+}
+
+/** Lo que el Agente tiene conectado en la sesión viva. */
+export async function listAgentExtensions(): Promise<{
+  extensions: AgentExtension[];
+  error?: string;
+}> {
+  const s = sesionActual();
+  // Sin sesión abierta no se despierta la caja sólo para pintar una lista.
+  if (!s?.sessionId || !(s as any).conn) return { extensions: [] };
+  if (conexion?.socket && conexion.socket.readyState !== SOCKET_ABIERTO) {
+    return { extensions: [], error: "el canal con el agente está cerrado" };
+  }
+  try {
+    const r: any = await conTimeout(
+      (s as any).conn.agent.request("_goose/unstable/session/extensions/list", {
+        sessionId: s.sessionId,
+      }),
+      15_000,
+    );
+    return {
+      extensions: (r?.extensions ?? []).map((e: any) => ({
+        name: e.name ?? e.server?.name ?? "?",
+        description: e.description ?? "",
+        kind: e.type ?? "?",
+        propia: e.type === "mcp",
+      })),
+    };
+  } catch (e) {
+    // Otro agente no conoce este método: la pantalla no se rompe por eso.
+    return { extensions: [], error: `este agente no lista sus extensiones (${(e as Error).message})` };
+  }
+}
+
+/** Conecta una extensión a la sesión que está abierta, sin reiniciar el hilo.
+ *
+ *  `session/extensions/add` no está en la spec de ACP: es de goose, y pide su
+ *  propio envoltorio `GooseExtension::Mcp`, que lleva dentro el `McpServer`
+ *  de ACP en el campo `server`. */
+export async function conectarExtensionEnVivo(
+  e: Extension,
+): Promise<{ ok: boolean; error?: string }> {
+  const s = sesionActual();
+  if (!s?.sessionId || !(s as any).conn) return { ok: false, error: "no hay ningún hilo abierto" };
+  try {
+    await conTimeout(
+      (s as any).conn.agent.request("_goose/unstable/session/extensions/add", {
+        sessionId: s.sessionId,
+        extension: {
+          type: "mcp",
+          name: e.name,
+          description: `Dada de alta desde la web`,
+          display_name: e.name,
+          timeout: 60,
+          bundled: false,
+          available_tools: [],
+          envKeys: [],
+          server: aMcpServer(e),
+        },
+      }),
+      30_000,
+    );
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, error: (err as Error).message };
+  }
+}
