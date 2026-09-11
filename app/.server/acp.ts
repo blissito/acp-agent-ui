@@ -319,17 +319,24 @@ async function conexionCompartida() {
     // duerme mata la conexión sin avisar, y reusar esa conexión muerta deja la
     // pantalla en "Abriendo el canal ACP" con un error que no dice nada.
     let socket: any = null;
+    // El socket se construye DENTRO de createWebSocketStream, o sea antes de que
+    // exista `conn`. Los handlers no pueden cerrar sobre esa constante: si la
+    // caja está dormida, el `error` llega durante el connect y leerla revienta
+    // con ReferenceError dentro de un listener, que nadie atrapa y tumba el
+    // proceso. Se guarda aquí y se llena cuando ya hay conexión.
+    const propio: { conn: any } = { conn: null };
+    const caida = () => {
+      if (conexion && propio.conn && conexion.conn === propio.conn) conexion = null;
+      // El hilo abierto se quedó sin canal: su turno no puede seguir.
+      actual?.notificarCaida();
+    };
     class WSVigilado extends WebSocket {
       constructor(...args: any[]) {
         // @ts-expect-error el SDK construye con (url, protocols, opciones)
         super(...args);
         socket = this;
-        this.on("close", () => {
-          if (conexion?.conn === conn) conexion = null;
-        });
-        this.on("error", () => {
-          if (conexion?.conn === conn) conexion = null;
-        });
+        this.on("close", caida);
+        this.on("error", caida);
       }
     }
     const stream = createWebSocketStream(target.toString(), { WebSocket: WSVigilado, headers } as any);
@@ -355,6 +362,7 @@ async function conexionCompartida() {
     });
 
     const conn = app.connect(stream);
+    propio.conn = conn;
     const init: any = await conTimeout(
       conn.agent.request("initialize", {
         protocolVersion: 1,
@@ -408,6 +416,14 @@ function sesionPerdida(e: Error & { code?: number }): boolean {
     m.includes("session not found") ||
     m.includes("unknown session")
   );
+}
+
+/** Marca interna: el WebSocket con la caja se cortó a media conversación.
+ *  No es un error del agente ni un cancel del humano: el turno se reabre. */
+const CONEXION_CORTADA = "conexión con la caja cortada";
+
+function conexionPerdida(e: Error): boolean {
+  return sesionPerdida(e) || e?.message === CONEXION_CORTADA;
 }
 
 class SesionCruda {
@@ -468,6 +484,8 @@ class GooseSession extends EventEmitter {
   private replaying = false;
   /** El humano pidió cortar el turno; un error de cierre se cuenta como cancel. */
   private cancelSolicitado = false;
+  /** Rompe la espera de `nextUpdate` cuando el canal muere o el humano corta. */
+  private abortTurno: ((razon: Error) => void) | null = null;
   busy = false;
   ready = false;
   closed = false;
@@ -684,17 +702,52 @@ class GooseSession extends EventEmitter {
 
   /** Corta el turno en curso. `session/cancel` es notificación: no hay
    *  respuesta; el corte se ve cuando el agente cierra el turno (y el pump
-   *  emite `done`). Si el agente contesta con error, se cuenta como cancel. */
+   *  emite `done`). Si el agente contesta con error, se cuenta como cancel.
+   *  Si el canal ya está muerto, el aviso no llega: se corta en local. */
   cancelar() {
-    if (!this.busy || !this.sessionId || !this.conn) return;
+    if (!this.busy || !this.sessionId) return;
     this.cancelSolicitado = true;
-    try {
-      const agente = this.conn.agent;
-      const notify = agente?.notify ?? agente?.sendNotification;
-      notify?.call(agente, "session/cancel", { sessionId: this.sessionId });
-    } catch (e) {
-      console.warn("[cancel]", (e as Error).message);
+    // `conexion` es la referencia viva; `this.conn` puede quedar apuntando a un
+    // socket que ya se cayó. Si el canal no está abierto, mandar el aviso es
+    // tirarlo a un agujero negro y el turno no se cerraría nunca.
+    const canalVivo = Boolean(conexion && conexion.socket && conexion.socket.readyState === SOCKET_ABIERTO);
+    if (canalVivo && this.conn) {
+      try {
+        const agente = this.conn.agent;
+        const notify = agente?.notify ?? agente?.sendNotification;
+        notify?.call(agente, "session/cancel", { sessionId: this.sessionId });
+      } catch (e) {
+        console.warn("[cancel]", (e as Error).message);
+      }
+      return;
     }
+    // Canal muerto: se corta la espera local y el `catch` del pump lo cuenta
+    // como cancel. Así el botón de parar sigue sirviendo con la caja dormida.
+    this.abortTurno?.(new Error("turno cortado"));
+  }
+
+  /** El socket con la caja se cayó a media conversación: corta la espera para
+   *  que el pump reabra el hilo en vez de quedarse colgado para siempre. */
+  notificarCaida() {
+    if (!this.busy) return;
+    this.abortTurno?.(new Error(CONEXION_CORTADA));
+  }
+
+  /** Espera el siguiente update del turno, dejándose cortar por un cancel del
+   *  humano o por la caída del canal. Sin esto, un `nextUpdate` sobre un socket
+   *  muerto cuelga para siempre y `busy` no se limpia. */
+  private siguienteUpdate(): Promise<any> {
+    // La caída pudo llegar antes de que hubiera una espera que cortar: si el
+    // canal ya no está, se falla aquí en vez de esperar a un agente que no oye.
+    if (!conexion || !conexion.socket || conexion.socket.readyState !== SOCKET_ABIERTO) {
+      return Promise.reject(new Error(CONEXION_CORTADA));
+    }
+    return Promise.race([
+      this.session.nextUpdate(),
+      new Promise<never>((_, rej) => {
+        this.abortTurno = rej;
+      }),
+    ]);
   }
 
   /** Cierra las herramientas que quedaron a medias. Un turno cortado (o que
@@ -801,6 +854,8 @@ class GooseSession extends EventEmitter {
   private pump() {
     if (!this.ready || this.busy || this.queue.length === 0) return;
     this.busy = true;
+    // La señal de corte es por turno: la del anterior ya no vale.
+    this.abortTurno = null;
     const item = this.queue.shift()!;
     let turnUsage: unknown = null;
     let answer = "";
@@ -827,10 +882,14 @@ class GooseSession extends EventEmitter {
           : item.text;
       const correrTurno = async () => {
       const promptP = this.session.prompt(content);
+      // Si el turno se corta antes de que el agente conteste (canal muerto),
+      // esta promesa se queda sin dueño; su rechazo sería un unhandled
+      // rejection. El manejador de aquí no estorba al `await` de abajo.
+      promptP.catch(() => {});
       // Lo que el agente escriba después de una herramienta abre párrafo.
       let trasHerramienta = false;
       while (true) {
-        const m = await this.session.nextUpdate();
+        const m = await this.siguienteUpdate();
         if (m.kind === "stop") break;
         if (m.kind !== "session_update") continue;
         const u = m.update ?? {};
@@ -891,7 +950,7 @@ class GooseSession extends EventEmitter {
         // sessionId que teníamos ya no existe del otro lado. Se reabre el hilo
         // y se manda el turno otra vez. Sólo si aún no llegó texto: repetir con
         // media respuesta pintada la duplicaría.
-        if (!sesionPerdida(e as Error) || answer) throw e;
+        if (!conexionPerdida(e as Error) || answer) throw e;
         this.emit("event", {
           type: "warning",
           message: "La caja había dormido; reabro el hilo y lo mando de nuevo.",
@@ -1178,6 +1237,13 @@ export function subscribe(id: string, onEvent: (e: AcpEvent) => void) {
     onEvent({ type: "started", sessionId: s.sessionId });
     if (s.models.length) {
       onEvent({ type: "models", options: s.models, current: s.currentModel });
+    }
+    // Si el SSE se cayó a media respuesta y volvió cuando el turno ya había
+    // terminado, este cliente se quedó con el spinner girando y el botón de
+    // parar no tenía nada que cortar. El `done` de reencuentro lo desatasca:
+    // sin turno en vuelo, la pantalla no tiene por qué creer que lo hay.
+    if (!s.busy) {
+      onEvent({ type: "done", stopReason: "completed", usage: null });
     }
   } else if (!s.closed) {
     onEvent({ type: "status", phase: s.phase });
