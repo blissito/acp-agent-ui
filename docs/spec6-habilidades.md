@@ -1,4 +1,4 @@
-# Spec 7 — Tu agente haciendo lo tuyo: habilidades
+# Spec 6 — Tu agente haciendo lo tuyo: habilidades
 
 > **Plan, no bitácora.** Es la sesión donde el alumno se lleva algo suyo.
 

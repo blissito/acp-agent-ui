@@ -104,6 +104,7 @@ Un `POST /api/v2/agents` con `template: ghosty-lite`, el token OAuth de Claude
   tipo de mensaje distinto en Baileys, de ida y de vuelta. Lo mismo aplica a Slack o Telegram: la
   superficie se implementa entera, lo que cambia es si la puerta es oficial.
 - **El permiso desde el grupo** (spec 4), cuando ghosty-lite lo entregue.
+- **Operación** ([`operacion.md`](operacion.md)): saber cuándo se rompe. Queda como plan, fuera del temario.
 - **La sesión de WhatsApp al hostear**: `ACP_EXTENSIONS_DB` a `/data` para que sobreviva al
   despliegue.
 - Usuarios: quien tenga el link opera el canal. Se anota como límite.

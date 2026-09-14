@@ -1,6 +1,6 @@
-# Spec 6 — Todo sólido, corriendo, y con una forma de saber si se rompe
+# Operación — Todo sólido, corriendo, y con una forma de saber si se rompe
 
-> **Plan, no bitácora.**
+> **Plan, no bitácora.** Fuera del temario del taller: la sesión 6 es habilidades.
 
 ## El problema
 
