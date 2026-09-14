@@ -108,3 +108,57 @@ Un `POST /api/v2/agents` con `template: ghosty-lite`, el token OAuth de Claude
 - **La sesión de WhatsApp al hostear**: `ACP_EXTENSIONS_DB` a `/data` para que sobreviva al
   despliegue.
 - Usuarios: quien tenga el link opera el canal. Se anota como límite.
+
+## Cómo rehacerlo desde la rama `sesion-4-mcp`
+
+Para que un agente (o un alumno) lo construya en vivo, en este orden. Cada paso compila y se
+prueba solo antes del siguiente.
+
+1. **La caja.** `EASYBITS_API_KEY=… CLAUDE_CODE_OAUTH_TOKEN=… node scripts/new-ghosty-lite.mjs`
+   (el token sale de `claude setup-token`). Reescribe `.env`. Comprobar: `npm run dev`, abrir
+   `/`, pedir "di hola".
+2. **Turnos desde fuera del navegador** (`app/.server/acp.ts`): a `ask()` se le da un
+   `onAnswer(answer, error, images)` que se llama al cerrar el turno, y un `via`/`from` que se
+   guardan en el mensaje y se emiten como evento `user`. Sobre eso, `askFromChannel(text, via,
+   from, images)` → `Promise<{ text, images }>`, contra el hilo abierto o uno nuevo.
+3. **Imágenes por ACP** (mismo archivo): en el bucle del turno, `tool_call_update.content[]`
+   trae `{ type: "content", content: { type: "image", data, mimeType } }`; se cuelgan del
+   mensaje del agente, se emiten como evento `image` y van en el `onAnswer`. Sólo si el título
+   de la tool empieza con `mcp:`.
+4. **Modo `auto`**: tras `session/new`, si `modes.currentModeId !== "auto"`,
+   `session/set_mode { sessionId, modeId: "auto" }`. Sin esto toda tool se cuelga con claude-acp.
+5. **El MCP de imagen** (`mcp/imagen.ts`, sin dependencias): `initialize`, `tools/list`,
+   `tools/call` → `content: [{ type: "image", data, mimeType }, { type: "text", … }]`. Con
+   `--http PORT`: POST `/mcp` → JSON; notificación (sin id) → 202; GET → stream SSE abierto con
+   latido; DELETE → 200. Generador: `https://image.pollinations.ai/prompt/<prompt>?width=&height=`.
+   Subirlo a la caja por `/exec` (base64), arrancarlo con `nohup node imagen.ts --http 4123` y
+   darlo de alta en `/extensions` como http `http://127.0.0.1:4123/mcp`. **Hilo nuevo** después.
+   Comprobar en la web: "usa generar_imagen para…" → la foto aparece en la burbuja.
+6. **El canal** (`app/.server/whatsapp.ts`, `npm i @whiskeysockets/baileys@7.0.0-rc13 @hapi/boom qrcode`):
+   - auth sobre sqlite: `creds` e `keys` serializados con `BufferJSON`; `keys.set` con debounce
+     de 600 ms; `makeCacheableSignalKeyStore`.
+   - `makeWASocket({ version, auth, logger: silencioso, browser: Browsers.macOS("Chrome") })`;
+     `version` de `fetchLatestWaWebVersion` con carrera de 5 s.
+   - `connection.update`: `qr` → data URL con `qrcode`; `open` → `connected` con `sock.user`;
+     `close` con `DisconnectReason.restartRequired` (515) → reconectar en 500 ms sin contar;
+     `loggedOut` → borrar auth; otro → backoff `min(30 s, 2^n s)` hasta 5.
+   - código por número: `sock.requestPairingCode(phone)` 1.5 s después de crear el socket, sólo
+     si `!creds.registered`.
+   - `messages.upsert` tipo `notify`: sólo `@g.us`, ignorar `fromMe` y los ids que mandamos;
+     texto en `conversation` / `extendedTextMessage.text`; foto con `downloadMediaMessage(m,
+     "buffer")` + `imageMessage.caption`; reacción en `reactionMessage` (sólo si apunta a un id
+     nuestro).
+   - allowlist en tabla `whatsapp_groups (jid, subject, enabled, seen_at)`; lista con
+     `groupFetchAllParticipating` cacheada 60 s (nunca en el poll).
+   - ráfaga: buffer por grupo, 1.5 s, un `askFromChannel`; 👀 al empezar, `composing` cada 8 s,
+     ✅ al terminar; respuesta con `sendMessage(jid, { image, caption })` por cada imagen o
+     `{ text }`; un solo emoji → `{ react }`.
+7. **Rutas y vista**: `api/whatsapp` (GET estado+grupos; POST `connect | pair | disconnect |
+   group`), `api/whatsapp/events` (SSE del estado), `routes/whatsapp.tsx` (QR/código, conectado,
+   grupos con switch). `rehidratar()` al primer request reconecta si hay credenciales.
+8. **La web pinta los dos sentidos**: evento `user` con `via` → burbuja etiquetada; evento
+   `image` → imágenes en el mensaje del agente.
+
+Referencia de Baileys con todo lo anterior resuelto en producción:
+`easybits/app/.server/integrations/whatsapp/baileys.server.ts` (privado; el spec de arriba
+resume lo que hay que copiar).
