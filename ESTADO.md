@@ -73,9 +73,11 @@ desapareció del host sin aviso (404 "sandbox not found") mientras figuraba `run
   siguen en JSON plano. El alta se aplica en caliente con
   `_goose/unstable/session/extensions/add`: no hace falta reabrir el hilo. Ojo: **los tokens de un
   MCP http quedan en claro** en esa base.
-- **El permiso se auto-aprueba.** `session/request_permission` se acepta solo, en
-  `app/.server/acp.ts`. Tema de la [sesión 4](docs/spec4-permisos-extensiones.md).
-- **`GOOSE_MODE=approve` no es opcional** con `claude-acp`. Sin él goose pide el modo
+- **El hilo corre en modo `auto`.** Con `claude-acp`, ghosty reenvía `session/request_permission`
+  pero no entrega la respuesta ("No task waiting for confirmation") y la herramienta se cuelga.
+  `acp.ts` hace `session/set_mode → auto` al abrir el hilo (`ACP_MODE` lo cambia). El permiso
+  desde WhatsApp ([sesión 4](docs/spec4-permisos-extensiones.md)) espera a que lo arreglen.
+- **`GHOSTY_MODE=approve` (antes `GOOSE_MODE`) no es opcional** con `claude-acp`. Sin él goose pide el modo
   `bypassPermissions`, que el adaptador de Claude no ofrece, y todo turno muere con un
   `Internal error` mudo. El motivo real vive en `/root/.local/state/goose/logs/cli/<fecha>/*.log`,
   no en journald.

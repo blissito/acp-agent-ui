@@ -1,6 +1,8 @@
-# Spec 4 — Herramientas nuevas, y pidiéndote permiso por WhatsApp
+# Spec 4 — Herramientas nuevas: extensiones MCP y el permiso
 
-> **Plan, no bitácora.**
+> **Hecha (sesión 4, 10 sep 2026) en lo de extensiones.** El permiso desde fuera de la web sigue
+> pendiente: el canal se construyó en la sesión 5 y ghosty-lite no entrega la respuesta del permiso
+> (ver [`spec5-canales.md`](spec5-canales.md), hueco 4).
 
 ## El problema
 

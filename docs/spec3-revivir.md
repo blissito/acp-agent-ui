@@ -1,7 +1,7 @@
 # Spec 3 — Lo matas a media tarea y revive justo donde iba
 
-> **Plan, no bitácora.** Las sesiones 1 y 2 están hechas y verificadas; ésta todavía no.
-> Aquí va lo que ya se sabe y lo que falta decidir. Todo lo que dice este documento está probado
+> **Hecha (sesión 3, 8 sep 2026): episódica y procedimental; la semántica pasó a la 4.**
+> Todo lo que dice este documento está probado
 > contra la caja, no sacado de la documentación: donde las dos se contradicen, gana la caja.
 
 ## El problema
