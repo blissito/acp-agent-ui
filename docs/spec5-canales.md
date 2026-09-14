@@ -74,6 +74,12 @@ Cloud API si el cliente la pide.
 (`--http 4123`), porque el adaptador `claude-acp` sólo monta MCPs http. El agente no sabe de
 WhatsApp ni de la web: devuelve la imagen por el protocolo y cada canal decide cómo entregarla.
 
+En la caja vive como unidad de systemd (`imagen.service`, `Restart=always`, arranca con la
+caja): la instala `scripts/install-imagen-mcp.mjs`, que además deja un `CLAUDE.md` en
+`/data/work` para que el agente use la tool a la primera y no se vaya a leer SDKs. Después de
+instalarla o reiniciarla hay que abrir hilo nuevo: el hilo abierto se queda con la conexión MCP
+vieja.
+
 ### La caja — `scripts/new-ghosty-lite.mjs`
 
 Un `POST /api/v2/agents` con `template: ghosty-lite`, el token OAuth de Claude
@@ -94,8 +100,10 @@ Un `POST /api/v2/agents` con `template: ghosty-lite`, el token OAuth de Claude
    (`/data/ghosty/state/logs/cli/…`). El hilo se pone en `auto` con `session/set_mode` al
    abrirse (`ACP_MODE` lo cambia). **El permiso por WhatsApp del spec 4 queda bloqueado por esto.**
 5. Menores: `seedFiles` aplana a `/data/workspace/<nombre>`; en `/exec` no hay `ps` ni `pgrep` y
-   `pkill -f` mata al propio shell; `GET /sandboxes/:id/logs` da 500; el proxy LLM medido no tiene
-   Claude. Y reiniciar el proceso del MCP deja al hilo abierto con la conexión muerta: hilo nuevo.
+   `pkill -f` mata al propio shell (también un `grep` sobre `/proc/*/cmdline` que coincida con
+   el propio comando: filtrar por `comm = node`); `GET /sandboxes/:id/logs` da 500; el proxy LLM
+   medido no tiene Claude. Y reiniciar el proceso del MCP deja al hilo abierto con la conexión
+   muerta: hilo nuevo.
 
 ## Lo que queda
 
@@ -131,7 +139,7 @@ prueba solo antes del siguiente.
    `tools/call` → `content: [{ type: "image", data, mimeType }, { type: "text", … }]`. Con
    `--http PORT`: POST `/mcp` → JSON; notificación (sin id) → 202; GET → stream SSE abierto con
    latido; DELETE → 200. Generador: `https://image.pollinations.ai/prompt/<prompt>?width=&height=`.
-   Subirlo a la caja por `/exec` (base64), arrancarlo con `nohup node imagen.ts --http 4123` y
+   Instalarlo con `node scripts/install-imagen-mcp.mjs` (unidad de systemd en la caja) y
    darlo de alta en `/extensions` como http `http://127.0.0.1:4123/mcp`. **Hilo nuevo** después.
    Comprobar en la web: "usa generar_imagen para…" → la foto aparece en la burbuja.
 6. **El canal** (`app/.server/whatsapp.ts`, `npm i @whiskeysockets/baileys@7.0.0-rc13 @hapi/boom qrcode`):

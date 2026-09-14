@@ -18,7 +18,7 @@ responde en markdown y reporta tokens y costo. Verificado el 31 de agosto con
 | Agente | ghosty-lite `6aa7fc28…` en caja `sb_66f127ce-…` (la `goose-demo` murió el 14 sep) | ✅ `ghosty-lite-runtime` |
 | Modelo | Sonnet 5 por `claude-acp` (suscripción, no API key) | ✅ el hilo se pone en modo `auto` |
 | WhatsApp | `app/.server/whatsapp.ts`, Baileys, credenciales en sqlite | ✅ sesión 5 |
-| MCP imagen | `mcp/imagen.ts` corriendo por HTTP en la caja (`127.0.0.1:4123`) | ✅ no sobrevive al reboot de la caja |
+| MCP imagen | `mcp/imagen.ts` como `imagen.service` en la caja (`127.0.0.1:4123`) | ✅ `scripts/install-imagen-mcp.mjs` |
 | Repo | [blissito/acp-agent-ui](https://github.com/blissito/acp-agent-ui) | público |
 
 ## Para arrancar
@@ -34,7 +34,7 @@ El `.env` (fuera del repo) lleva `ACP_WS_URL`, `ACP_SECRET`, `ACP_CWD`, `AGENT_B
 
 Si la caja muere, [`scripts/new-ghosty-lite.mjs`](scripts/new-ghosty-lite.mjs) levanta un ghosty-lite
 con Claude en ~10 s (`EASYBITS_API_KEY` y `CLAUDE_CODE_OAUTH_TOKEN` en el entorno) y reescribe el
-`.env`; luego hay que arrancar el MCP en la caja (`sh /data/workspace/deploy.sh` por `/exec`).
+`.env`; luego `node scripts/install-imagen-mcp.mjs` deja el MCP de imágenes como unidad en la caja.
 El camino viejo, [`scripts/new-goose-box.mjs`](scripts/new-goose-box.mjs), levanta una caja goose de cero
 en ~25 s (crear, instalar goose, LLM = EasyBits, `/data/work`, unidad, expose) y reescribe el
 `.env`. Sólo necesita `EASYBITS_API_KEY` en el entorno. Pasó el 2 sep: la primera `goose-demo`
