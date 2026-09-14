@@ -357,10 +357,11 @@ async function conexionCompartida() {
     // Los handlers se registran ANTES de conectar, y hablan con el hilo abierto
     // en ese momento: la conexión sobrevive a las sesiones.
     const app = client({ name: "acp-web3" } as any);
-    app.onRequest("session/request_permission", ({ params }: any) => {
+    app.onRequest("session/request_permission", async ({ params }: any) => {
       const options = params.options ?? [];
       const allow = options.find((o: any) => o.kind === "allow_once") ?? options[0];
       const optionId = allow?.optionId ?? options[0]?.optionId;
+      console.log(`[acp] request_permission ${params.toolCall?.title ?? "?"} → ${optionId}`);
       // Se auto-aprueba (tema de la sesión 4), pero la petición se enseña.
       actual?.emit("event", {
         type: "tool",
@@ -368,6 +369,11 @@ async function conexionCompartida() {
         title: params.toolCall?.title ?? "herramienta",
         status: "pending",
       });
+      // ghosty (claude-acp) manda la petición ANTES de registrar quién la
+      // espera: si se contesta en el mismo tick, tira "No task waiting for
+      // confirmation" y el turno se queda colgado para siempre. Medio segundo
+      // de cortesía lo evita. Visto el 14 sep 2026 en /data/ghosty/state/logs.
+      await new Promise((r) => setTimeout(r, 500));
       return { outcome: { outcome: "selected", optionId } };
     });
     app.onNotification("session/update", ({ params }: any) => {
@@ -697,6 +703,20 @@ class GooseSession extends EventEmitter {
       this.sessionId = this.session.sessionId;
     }
     this.ready = true;
+    // Con claude-acp, ghosty pide permiso al Cliente pero no sabe entregar la
+    // respuesta ("No task waiting for confirmation" en su log): cada tool se
+    // queda colgada. Hasta que eso viva en WhatsApp (spec 4), el hilo corre en
+    // `auto` y el agente no pregunta. ACP_MODE lo cambia sin tocar código.
+    const modes = this.session?.newSessionResponse?.modes;
+    const modoDeseado = process.env.ACP_MODE ?? "auto";
+    if (modes && modes.currentModeId !== modoDeseado && modes.availableModes?.some((m: any) => m.id === modoDeseado)) {
+      try {
+        await ctx.request("session/set_mode", { sessionId: this.sessionId, modeId: modoDeseado });
+        console.log(`[acp] modo ${modes.currentModeId} → ${modoDeseado}`);
+      } catch (e) {
+        console.warn("[acp] set_mode falló:", (e as Error).message);
+      }
+    }
     this.applyModelOptions(this.session?.newSessionResponse?.configOptions);
     if (this.modeloPreferido && this.modeloPreferido !== this.currentModel) {
       void this.setModel(this.modeloPreferido).catch(() => {});
@@ -977,7 +997,12 @@ class GooseSession extends EventEmitter {
           this.emit("event", ev);
           // El resultado de la herramienta viaja en `content[]`; una imagen
           // viene como { type: "content", content: { type: "image", … } }.
-          for (const bloque of Array.isArray(u.content) ? u.content : []) tomarImagen(bloque?.content);
+          // Sólo cuentan las de extensiones (`mcp:`): un Read de un PNG
+          // también devuelve imagen, pero ésa la leyó el agente, no la hizo.
+          const tituloTool = this.messages[this.messages.length - 1]?.tools?.find((t) => t.id === u.toolCallId)?.title ?? "";
+          if (/^mcp:/i.test(tituloTool)) {
+            for (const bloque of Array.isArray(u.content) ? u.content : []) tomarImagen(bloque?.content);
+          }
         } else if (u.sessionUpdate === "config_option_update") {
           this.applyModelOptions(u.configOptions);
         } else if (u.sessionUpdate === "usage_update") {

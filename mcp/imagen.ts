@@ -6,11 +6,17 @@
  * Devuelve la imagen por el protocolo y cada canal decide cómo entregarla —
  * el grupo la recibe como foto, el navegador la pinta en la burbuja.
  *
- * Sin dependencias. Corre dentro de la caja: node /data/repo/mcp/imagen.ts
+ * Sin dependencias. Corre dentro de la caja, por stdio o por HTTP:
+ *   node imagen.ts                 → stdio (JSON-RPC por renglón)
+ *   node imagen.ts --http 4123     → Streamable HTTP en http://127.0.0.1:4123/mcp
+ * El segundo existe porque el adaptador claude-acp sólo monta MCPs http
+ * (`mcpCapabilities: { http: true }`): el proceso vive en la caja igual, pero
+ * escucha en un puerto en vez de en stdin.
  * Prueba directa:
  *   echo '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"generar_imagen","arguments":{"prompt":"un gato"}}}' | node mcp/imagen.ts
  */
 import { mkdirSync, writeFileSync } from "node:fs";
+import { createServer } from "node:http";
 
 type RpcRequest = { jsonrpc: "2.0"; id?: number | string; method: string; params?: any };
 
@@ -22,7 +28,7 @@ const TOOLS = [
   {
     name: "generar_imagen",
     description:
-      "Genera una imagen a partir de una descripción en texto y la devuelve como imagen. Úsala cuando te pidan dibujar, ilustrar o generar una imagen.",
+      "Genera una imagen a partir de una descripción en texto y la entrega directamente al humano por su canal. Úsala cuando te pidan dibujar, ilustrar o generar una imagen. Es la ÚNICA forma de generar imágenes: no busques otras herramientas ni la repitas con otro motor; un solo intento y confirma.",
     inputSchema: {
       type: "object",
       properties: {
@@ -35,12 +41,11 @@ const TOOLS = [
   },
 ];
 
-function responder(id: RpcRequest["id"], result: unknown) {
-  process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id, result }) + "\n");
-}
-function fallar(id: RpcRequest["id"], message: string) {
-  process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id, error: { code: -32000, message } }) + "\n");
-}
+// `atender` devuelve la respuesta como línea JSON (o nada para una notificación);
+// quien la transporta —stdout o la respuesta HTTP— la escribe.
+const responder = (id: RpcRequest["id"], result: unknown) => JSON.stringify({ jsonrpc: "2.0", id, result });
+const fallar = (id: RpcRequest["id"], message: string) =>
+  JSON.stringify({ jsonrpc: "2.0", id, error: { code: -32000, message } });
 
 async function generar(prompt: string, width = 768, height = 768) {
   const url = `${IMAGE_API}${encodeURIComponent(prompt)}?width=${width}&height=${height}&nologo=true`;
@@ -58,7 +63,7 @@ async function generar(prompt: string, width = 768, height = 768) {
   return { data: bytes.toString("base64"), mimeType, path };
 }
 
-async function atender(req: RpcRequest) {
+async function atender(req: RpcRequest): Promise<string | undefined> {
   switch (req.method) {
     case "initialize":
       return responder(req.id, {
@@ -85,21 +90,53 @@ async function atender(req: RpcRequest) {
     }
     default:
       if (req.id === undefined) return;
-      process.stdout.write(
-        JSON.stringify({ jsonrpc: "2.0", id: req.id, error: { code: -32601, message: `no conozco ${req.method}` } }) + "\n",
-      );
+      return JSON.stringify({ jsonrpc: "2.0", id: req.id, error: { code: -32601, message: `no conozco ${req.method}` } });
   }
 }
 
-let pendiente = "";
-process.stdin.setEncoding("utf8");
-process.stdin.on("data", (trozo) => {
-  pendiente += trozo;
-  let i;
-  while ((i = pendiente.indexOf("\n")) >= 0) {
-    const linea = pendiente.slice(0, i).trim();
-    pendiente = pendiente.slice(i + 1);
-    if (!linea) continue;
-    try { void atender(JSON.parse(linea)); } catch {}
-  }
-});
+const httpIdx = process.argv.indexOf("--http");
+if (httpIdx >= 0) {
+  const port = Number(process.argv[httpIdx + 1] || 4123);
+  createServer((req, res) => {
+    // El cliente de Streamable HTTP abre un GET para recibir notificaciones del
+    // servidor. No mandamos ninguna, pero el canal se deja abierto con latido:
+    // un 405 aquí deja a algunos clientes reintentando en vez de llamar tools.
+    if (req.method === "GET") {
+      res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache", connection: "keep-alive" });
+      res.write(": listo\n\n");
+      const beat = setInterval(() => res.write(": ping\n\n"), 20_000);
+      req.on("close", () => clearInterval(beat));
+      console.error("[imagen] GET stream abierto");
+      return;
+    }
+    if (req.method === "DELETE") { res.writeHead(200).end(); return; }
+    if (req.method !== "POST") { res.writeHead(405).end(); return; }
+    let body = "";
+    req.on("data", (c) => (body += c));
+    req.on("end", async () => {
+      let msg: RpcRequest;
+      try { msg = JSON.parse(body); } catch { res.writeHead(400).end(); return; }
+      // Una notificación (sin id) se acepta y no lleva cuerpo: así lo pide el transporte.
+      if (msg.id === undefined) { res.writeHead(202).end(); return; }
+      console.error(`[imagen] ${msg.method}${msg.params?.name ? " " + msg.params.name : ""}`);
+      const linea = await atender(msg);
+      console.error(`[imagen] ${msg.method} → ${linea ? linea.length + " bytes" : "sin cuerpo"}`);
+      res.writeHead(200, { "content-type": "application/json" }).end(linea ?? "");
+    });
+  }).listen(port, "127.0.0.1", () => console.error(`[imagen] http://127.0.0.1:${port}/mcp`));
+} else {
+  let pendiente = "";
+  process.stdin.setEncoding("utf8");
+  process.stdin.on("data", (trozo) => {
+    pendiente += trozo;
+    let i;
+    while ((i = pendiente.indexOf("\n")) >= 0) {
+      const linea = pendiente.slice(0, i).trim();
+      pendiente = pendiente.slice(i + 1);
+      if (!linea) continue;
+      try {
+        void atender(JSON.parse(linea)).then((r) => r && process.stdout.write(r + "\n"));
+      } catch {}
+    }
+  });
+}
