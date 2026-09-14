@@ -117,10 +117,17 @@ export function useAcpStream(
     // Alguien escribió desde WhatsApp: se pinta como turno del humano y lo que
     // el agente conteste abre un mensaje nuevo, no se pega al anterior.
     es.addEventListener("user", (e) => {
-      const d = JSON.parse((e as MessageEvent).data) as { text: string; via: "whatsapp"; from?: string };
+      const d = JSON.parse((e as MessageEvent).data) as {
+        text: string; via: "whatsapp"; from?: string; images?: ImagePayload[];
+      };
       streaming.current = false;
       setBusy(true);
-      setTurns((prev) => [...prev, { role: "user", text: d.text, via: d.via, from: d.from }]);
+      setTurns((prev) => [...prev, { role: "user", text: d.text, via: d.via, from: d.from, images: d.images }]);
+    });
+    // Una imagen que devolvió una herramienta: se cuelga del mensaje del agente.
+    es.addEventListener("image", (e) => {
+      const im = JSON.parse((e as MessageEvent).data) as ImagePayload;
+      patchCurrent((t) => ({ ...t, images: [...(t.images ?? []), im] }));
     });
     es.addEventListener("thought", (e) => appendThought(JSON.parse((e as MessageEvent).data).text));
     es.addEventListener("tool", (e) => upsertTool(JSON.parse((e as MessageEvent).data)));

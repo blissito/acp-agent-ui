@@ -161,7 +161,9 @@ export type AcpEvent =
   // Un mensaje del humano que NO vino de este navegador (llegó por WhatsApp):
   // la pantalla abierta lo pinta como turno propio, para que los dos clientes
   // vean la misma conversación.
-  | { type: "user"; text: string; via: Canal; from?: string }
+  | { type: "user"; text: string; via: Canal; from?: string; images?: ImagePayload[] }
+  // Una imagen que el agente devuelve en el turno (la trae una herramienta).
+  | { type: "image"; data: string; mimeType: string }
   | { type: "thought"; text: string }
   | {
       // Una herramienta del agente: tool_call la crea, tool_call_update la
@@ -486,7 +488,7 @@ class SesionCruda {
 export interface AskOpts {
   via?: Canal;
   from?: string;
-  onAnswer?: (answer: string, error?: Error) => void;
+  onAnswer?: (answer: string, error?: Error, images?: ImagePayload[]) => void;
 }
 
 class GooseSession extends EventEmitter {
@@ -525,7 +527,7 @@ class GooseSession extends EventEmitter {
     text: string;
     images?: ImagePayload[];
     /** Quien pidió el turno desde fuera del navegador espera el texto entero. */
-    onAnswer?: (answer: string, error?: Error) => void;
+    onAnswer?: (answer: string, error?: Error, images?: ImagePayload[]) => void;
   }[] = [];
   private idleTimer: NodeJS.Timeout | null = null;
   private current: string | null = null;
@@ -719,7 +721,7 @@ class GooseSession extends EventEmitter {
     if (opts.via && opts.via !== "web") {
       msg.via = opts.via;
       if (opts.from) msg.from = opts.from;
-      this.emit("event", { type: "user", text, via: opts.via, from: opts.from });
+      this.emit("event", { type: "user", text, via: opts.via, from: opts.from, images: images.length ? images : undefined });
     }
     this.messages.push(msg);
     if (this.messages.length === 1) {
@@ -890,6 +892,21 @@ class GooseSession extends EventEmitter {
     const item = this.queue.shift()!;
     let turnUsage: unknown = null;
     let answer = "";
+    // Las imágenes que devuelven las herramientas del turno: van al mensaje del
+    // agente y al canal que preguntó.
+    const turnImages: ImagePayload[] = [];
+    const tomarImagen = (c: any) => {
+      if (c?.type !== "image" || !c.data) return;
+      const img = { mimeType: c.mimeType ?? "image/png", data: c.data };
+      turnImages.push(img);
+      let last = this.messages[this.messages.length - 1];
+      if (last?.role !== "assistant") {
+        last = { role: "assistant", text: "", at: Date.now() };
+        this.messages.push(last);
+      }
+      (last.images ??= []).push(img);
+      this.emit("event", { type: "image", ...img });
+    };
 
     (async () => {
       // Una imagen contra un modelo sin visión no falla de forma legible: el
@@ -925,6 +942,7 @@ class GooseSession extends EventEmitter {
         if (m.kind !== "session_update") continue;
         const u = m.update ?? {};
         if (u.sessionUpdate === "agent_message_chunk") {
+          tomarImagen(u.content);
           let t = u.content?.text ?? "";
           if (t) {
             // El agente retoma la frase después de usar una herramienta y el
@@ -957,6 +975,9 @@ class GooseSession extends EventEmitter {
           upsertTool(this.messages, entry as ToolEntry);
           trasHerramienta = true;
           this.emit("event", ev);
+          // El resultado de la herramienta viaja en `content[]`; una imagen
+          // viene como { type: "content", content: { type: "image", … } }.
+          for (const bloque of Array.isArray(u.content) ? u.content : []) tomarImagen(bloque?.content);
         } else if (u.sessionUpdate === "config_option_update") {
           this.applyModelOptions(u.configOptions);
         } else if (u.sessionUpdate === "usage_update") {
@@ -1000,10 +1021,10 @@ class GooseSession extends EventEmitter {
       // inventar. Se marca como sin cerrar y el spinner para.
       this.cerrarToolsPendientes("cancelled");
       this.emit("event", { type: "done", stopReason: r.stopReason, usage: turnUsage });
-      item.onAnswer?.(answer);
+      item.onAnswer?.(answer, undefined, turnImages);
     })()
       .catch((e) => {
-        item.onAnswer?.(answer, e);
+        item.onAnswer?.(answer, e, turnImages);
         // El agente suele cerrar el cancel con stopReason, pero algunos cortes
         // responden al prompt con error: eso no es una falla, es el cancel.
         if (this.cancelSolicitado) {
@@ -1243,14 +1264,25 @@ export async function askConversation(id: string, text: string, images: ImagePay
  * abierto —dos clientes, una conversación— y si no hay ninguno abre uno.
  * Resuelve con la respuesta entera del agente, que es lo que el grupo espera.
  */
-export async function askFromChannel(text: string, via: Canal, from?: string): Promise<string> {
+export interface ChannelAnswer {
+  text: string;
+  images: ImagePayload[];
+}
+
+export async function askFromChannel(
+  text: string,
+  via: Canal,
+  from?: string,
+  images: ImagePayload[] = [],
+): Promise<ChannelAnswer> {
   const abierto = sesionActual();
   const id = abierto ? (abierto.sessionId ?? HILO_NUEVO) : HILO_NUEVO;
-  return new Promise<string>((resolve, reject) => {
-    void askConversation(id, text, [], {
+  return new Promise<ChannelAnswer>((resolve, reject) => {
+    void askConversation(id, text, images, {
       via,
       from,
-      onAnswer: (answer, error) => (error && !answer ? reject(error) : resolve(answer)),
+      onAnswer: (answer, error, imgs = []) =>
+        error && !answer && !imgs.length ? reject(error) : resolve({ text: answer, images: imgs }),
     }).then((ok) => {
       if (!ok) reject(new Error("no pude abrir el hilo"));
     });

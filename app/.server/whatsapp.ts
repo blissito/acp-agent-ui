@@ -13,6 +13,7 @@
 import { EventEmitter } from "node:events";
 import { Boom } from "@hapi/boom";
 import makeWASocket, {
+  downloadMediaMessage,
   Browsers,
   BufferJSON,
   DisconnectReason,
@@ -26,6 +27,7 @@ import makeWASocket, {
 import QRCode from "qrcode";
 import { abrir } from "./extensions";
 import { askFromChannel } from "./acp";
+import type { ImagePayload } from "~/hooks/useAcpStream";
 
 export type WaStatus = "disconnected" | "connecting" | "qr_pending" | "pairing" | "connected" | "failed";
 
@@ -339,7 +341,10 @@ async function anotarGrupoVisto(s: WASocket, jid: string) {
 // ---------------------------------------------------------------------------
 // Entrada: un mensaje del grupo → un turno del motor → la respuesta al grupo
 // ---------------------------------------------------------------------------
-type Pendiente = { items: { text: string; from: string; key: proto.IMessageKey }[]; timer: NodeJS.Timeout | null; running: boolean };
+type Entrada = { text: string; from: string; key: proto.IMessageKey; image?: ImagePayload };
+type Pendiente = { items: Entrada[]; timer: NodeJS.Timeout | null; running: boolean };
+// Un solo emoji (con o sin modificador de tono): si el agente contesta así, va como reacción.
+const SOLO_EMOJI = /^\p{Extended_Pictographic}(\uFE0F|\p{Emoji_Modifier})?$/u;
 const buffers = new Map<string, Pendiente>();
 
 async function recibir(s: WASocket, m: proto.IWebMessageInfo) {
@@ -348,18 +353,41 @@ async function recibir(s: WASocket, m: proto.IWebMessageInfo) {
   if (!key || !jid || !jid.endsWith("@g.us")) return; // sólo grupos
   if (key.id && sentIds.has(key.id)) return;
   if (key.fromMe) return; // lo que escribe el propio número no es una orden
-  const text = m.message?.conversation ?? m.message?.extendedTextMessage?.text ?? "";
-  if (!text.trim()) return;
+  const msg = m.message ?? {};
+  const from = m.pushName || (key.participant ?? "").split("@")[0] || "alguien";
+
+  // Una reacción a algo que mandó el agente también es un mensaje para él:
+  // "👍 a tu respuesta" cierra el ciclo; a otros mensajes no le incumbe.
+  const reaccion = msg.reactionMessage;
+  let text = "";
+  let image: ImagePayload | undefined;
+  if (reaccion) {
+    if (!reaccion.key?.id || !sentIds.has(reaccion.key.id) || !reaccion.text) return;
+    text = `(${from} reaccionó con ${reaccion.text} a tu último mensaje)`;
+  } else if (msg.imageMessage) {
+    // La foto llega cifrada: Baileys la descarga y la descifra con las llaves
+    // de la sesión. Va al turno como base64, igual que una imagen del chat web.
+    try {
+      const buf = (await downloadMediaMessage(m as any, "buffer", {})) as Buffer;
+      image = { mimeType: msg.imageMessage.mimetype || "image/jpeg", data: buf.toString("base64") };
+    } catch (e) {
+      log(`no pude bajar la imagen: ${(e as Error).message}`);
+      return;
+    }
+    text = msg.imageMessage.caption ?? "";
+  } else {
+    text = msg.conversation ?? msg.extendedTextMessage?.text ?? "";
+  }
+  if (!text.trim() && !image) return;
   await anotarGrupoVisto(s, jid);
   if (!grupoActivo(jid)) {
     log(`mensaje en ${jid} ignorado: grupo apagado`);
     return;
   }
-  const from = m.pushName || (key.participant ?? "").split("@")[0] || "alguien";
-  log(`${from} en ${jid}: "${text.slice(0, 50)}"`);
+  log(`${from} en ${jid}: "${text.slice(0, 50)}"${image ? " 📷" : ""}`);
   let buf = buffers.get(jid);
   if (!buf) { buf = { items: [], timer: null, running: false }; buffers.set(jid, buf); }
-  buf.items.push({ text, from, key });
+  buf.items.push({ text, from, key, image });
   if (buf.running) return; // al terminar el turno en vuelo se vacía lo que llegó
   if (buf.timer) clearTimeout(buf.timer);
   buf.timer = setTimeout(() => void vaciar(s, jid), COALESCE_MS);
@@ -375,17 +403,35 @@ async function vaciar(s: WASocket, jid: string) {
   const from = last.from;
   // Si escribieron varias personas, se dice quién dijo qué.
   const varios = new Set(batch.map((b) => b.from)).size > 1;
-  const text = batch.map((b) => (varios ? `${b.from}: ${b.text}` : b.text)).join("\n");
+  const text = batch.map((b) => (varios ? `${b.from}: ${b.text}` : b.text)).filter(Boolean).join("\n");
+  const images = batch.map((b) => b.image).filter((i): i is ImagePayload => !!i);
 
   // 👀 = "te leí"; la burbuja de escribiendo mientras piensa; ✅ al contestar.
   s.sendMessage(jid, { react: { text: "👀", key: last.key } }).catch(() => {});
   s.sendPresenceUpdate("composing", jid).catch(() => {});
   const typing = setInterval(() => s.sendPresenceUpdate("composing", jid).catch(() => {}), 8000);
   try {
-    const answer = await askFromChannel(text, "whatsapp", from);
-    const body = answer.trim() || "Listo.";
-    const sent = await s.sendMessage(jid, { text: body });
-    if (sent?.key?.id) sentIds.add(sent.key.id);
+    const answer = await askFromChannel(text, "whatsapp", from, images);
+    const body = answer.text.trim();
+    // Cada imagen que devolvió una herramienta va como foto; el texto va de
+    // pie de la primera para no mandar dos burbujas.
+    for (const [k, img] of answer.images.entries()) {
+      const sent = await s.sendMessage(jid, {
+        image: Buffer.from(img.data, "base64"),
+        mimetype: img.mimeType,
+        caption: k === 0 ? body : undefined,
+      });
+      if (sent?.key?.id) sentIds.add(sent.key.id);
+    }
+    if (!answer.images.length) {
+      if (SOLO_EMOJI.test(body)) {
+        // Un emoji solo es una reacción, no un mensaje.
+        await s.sendMessage(jid, { react: { text: body, key: last.key } });
+      } else {
+        const sent = await s.sendMessage(jid, { text: body || "Listo." });
+        if (sent?.key?.id) sentIds.add(sent.key.id);
+      }
+    }
     s.sendMessage(jid, { react: { text: "✅", key: last.key } }).catch(() => {});
     log(`contesté en ${jid} (${batch.length} mensajes)`);
   } catch (e) {

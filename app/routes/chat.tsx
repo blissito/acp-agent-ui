@@ -126,6 +126,18 @@ function Bubble({ turn }: { turn: Turn }) {
           ))}
         </ul>
       )}
+      {turn.images && turn.images.length > 0 && (
+        <div className="mb-3 flex flex-wrap gap-2">
+          {turn.images.map((im, i) => (
+            <img
+              key={i}
+              src={`data:${im.mimeType};base64,${im.data}`}
+              alt=""
+              className="max-h-80 max-w-full rounded-xl border border-border-primary object-contain"
+            />
+          ))}
+        </div>
+      )}
       {turn.text && <Markdown>{turn.text}</Markdown>}
       {turn.usage && <MessageUsageStats {...turn.usage} />}
     </div>
