@@ -115,6 +115,9 @@ duerme.
 
 ## La vista `/whatsapp`
 
+> **Construida en la sesión 5** — ver [`spec5-canales.md`](spec5-canales.md). Lo de abajo es el
+> plan original; el permiso desde el grupo sigue pendiente (hueco 4 del spec 5).
+
 Ya existe en cascarón (`app/routes/whatsapp.tsx`, entrada en el panel debajo de Extensiones). Es
 la sección que la landing promete: "la integración va dada, ustedes la conectan". El canal son
 **grupos**, no chats 1:1: el agente vive en un grupo con las personas que lo operan.

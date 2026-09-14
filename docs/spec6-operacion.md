@@ -1,4 +1,4 @@
-# Spec 5 — Todo sólido, corriendo, y con una forma de saber si se rompe
+# Spec 6 — Todo sólido, corriendo, y con una forma de saber si se rompe
 
 > **Plan, no bitácora.**
 

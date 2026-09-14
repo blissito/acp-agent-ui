@@ -34,9 +34,10 @@ un documento por sesión en [`docs/`](docs/).
 | 1 | Vive fuera de tu compu y despierta cuando lo llamas | [`spec1-agente-fuera.md`](docs/spec1-agente-fuera.md) | ✅ |
 | 2 | UI propia, mostrando lo que hace mientras lo hace | [`spec2-ui-solida.md`](docs/spec2-ui-solida.md) | ✅ |
 | 3 | Lo matas a media tarea y revive donde iba | [`spec3-revivir.md`](docs/spec3-revivir.md) | plan |
-| 4 | Contesta por WhatsApp y te pide permiso desde ahí | [`spec4-permisos-extensiones.md`](docs/spec4-permisos-extensiones.md) | plan |
-| 5 | Sólido, corriendo, y con forma de saber si se rompe | [`spec5-operacion.md`](docs/spec5-operacion.md) | plan |
-| 6 | Haciendo lo tuyo: habilidades | [`spec6-habilidades.md`](docs/spec6-habilidades.md) | plan |
+| 4 | Herramientas nuevas: extensiones MCP y el permiso | [`spec4-permisos-extensiones.md`](docs/spec4-permisos-extensiones.md) | ✅ |
+| 5 | Un backend, n canales: WhatsApp por Baileys | [`spec5-canales.md`](docs/spec5-canales.md) | ✅ |
+| 6 | Sólido, corriendo, y con forma de saber si se rompe | [`spec6-operacion.md`](docs/spec6-operacion.md) | plan |
+| 7 | Haciendo lo tuyo: habilidades | [`spec7-habilidades.md`](docs/spec7-habilidades.md) | plan |
 
 El estado operativo del día a día vive en [`ESTADO.md`](ESTADO.md). Un primer intento de la
 interfaz, en SPA, quedó en [`legacy/`](legacy/).
