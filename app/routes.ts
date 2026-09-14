@@ -15,6 +15,8 @@ export default [
   route("api/conversations/:id/model", "routes/api.conversations.$id.model.ts"),
   route("api/agent-sessions", "routes/api.agent-sessions.ts"),
   route("api/extensions", "routes/api.extensions.ts"),
+  route("api/whatsapp", "routes/api.whatsapp.ts"),
+  route("api/whatsapp/events", "routes/api.whatsapp.events.ts"),
 
   layout("routes/_shell.tsx", [
     index("routes/hub.tsx"),

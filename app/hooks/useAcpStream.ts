@@ -30,6 +30,9 @@ export interface ToolEntry {
 export interface Turn {
   role: "user" | "assistant";
   text: string;
+  /** Por dónde entró: se etiqueta sólo cuando no fue esta web. */
+  via?: "web" | "whatsapp";
+  from?: string;
   thought?: string;
   tools?: ToolEntry[];
   images?: ImagePayload[];
@@ -111,6 +114,14 @@ export function useAcpStream(
     });
     es.addEventListener("status", (e) => setPhase(JSON.parse((e as MessageEvent).data).phase));
     es.addEventListener("chunk", (e) => appendChunk(JSON.parse((e as MessageEvent).data).text));
+    // Alguien escribió desde WhatsApp: se pinta como turno del humano y lo que
+    // el agente conteste abre un mensaje nuevo, no se pega al anterior.
+    es.addEventListener("user", (e) => {
+      const d = JSON.parse((e as MessageEvent).data) as { text: string; via: "whatsapp"; from?: string };
+      streaming.current = false;
+      setBusy(true);
+      setTurns((prev) => [...prev, { role: "user", text: d.text, via: d.via, from: d.from }]);
+    });
     es.addEventListener("thought", (e) => appendThought(JSON.parse((e as MessageEvent).data).text));
     es.addEventListener("tool", (e) => upsertTool(JSON.parse((e as MessageEvent).data)));
     es.addEventListener("usage", (e) => {

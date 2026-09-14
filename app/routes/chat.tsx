@@ -24,6 +24,7 @@ import {
   Globe,
   ListChecks,
   Loader2,
+  MessageCircle,
   Search,
   Terminal,
   Wrench,
@@ -38,11 +39,15 @@ const plano = (m: {
   text: string;
   images?: any[];
   tools?: any[];
+  via?: "web" | "whatsapp";
+  from?: string;
 }) => ({
   role: m.role,
   text: m.text,
   images: m.images,
   tools: m.tools,
+  via: m.via,
+  from: m.from,
 });
 
 export async function loader({ params }: Route.LoaderArgs) {
@@ -80,7 +85,12 @@ export async function loader({ params }: Route.LoaderArgs) {
 function Bubble({ turn }: { turn: Turn }) {
   if (turn.role === "user") {
     return (
-      <div className="flex justify-end">
+      <div className="flex flex-col items-end gap-1">
+        {turn.via === "whatsapp" && (
+          <span className="flex items-center gap-1 text-[11px] text-text-secondary">
+            <MessageCircle className="h-3 w-3" /> WhatsApp{turn.from ? ` · ${turn.from}` : ""}
+          </span>
+        )}
         <div className="max-w-[80%] rounded-2xl rounded-br-md bg-background-inverse px-4 py-2.5 text-sm text-text-inverse">
           {turn.images && turn.images.length > 0 && (
             <div className="mb-2 flex flex-wrap justify-end gap-1.5">

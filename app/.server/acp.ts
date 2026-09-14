@@ -158,6 +158,10 @@ export type AcpEvent =
   | { type: "started"; sessionId: string }
   | { type: "title"; title: string }
   | { type: "chunk"; text: string }
+  // Un mensaje del humano que NO vino de este navegador (llegó por WhatsApp):
+  // la pantalla abierta lo pinta como turno propio, para que los dos clientes
+  // vean la misma conversación.
+  | { type: "user"; text: string; via: Canal; from?: string }
   | { type: "thought"; text: string }
   | {
       // Una herramienta del agente: tool_call la crea, tool_call_update la
@@ -184,10 +188,17 @@ export type AcpEvent =
 // un 401 del WSS (secret ausente) o una caja que no contesta se ven así.
 const CONNECT_TIMEOUT_MS = Number(process.env.ACP_CONNECT_TIMEOUT_MS ?? 60_000);
 
+/** Por dónde entró un mensaje del humano: la web o un grupo de WhatsApp. */
+export type Canal = "web" | "whatsapp";
+
 export interface StoredMessage {
   role: "user" | "assistant";
   text: string;
   images?: ImagePayload[];
+  /** Sólo se guarda cuando no es la web. */
+  via?: Canal;
+  /** Quién lo escribió en el grupo, si se sabe. */
+  from?: string;
   /** Las herramientas que usó el agente en este turno. Se guardan aquí y no
    *  sólo se emiten al vivo: si no, al reabrir el hilo la conversación
    *  aparece sin rastro de lo que el agente hizo. */
@@ -472,6 +483,12 @@ class SesionCruda {
 // ---------------------------------------------------------------------------
 // GooseSession — una conexión ACP por conversación.
 // ---------------------------------------------------------------------------
+export interface AskOpts {
+  via?: Canal;
+  from?: string;
+  onAnswer?: (answer: string, error?: Error) => void;
+}
+
 class GooseSession extends EventEmitter {
   sessionId: string | null = null;
   agentCapabilities: any = null;
@@ -504,7 +521,12 @@ class GooseSession extends EventEmitter {
   private started = false;
   private conn: any = null;
   private session: any = null;
-  private queue: { text: string; images?: ImagePayload[] }[] = [];
+  private queue: {
+    text: string;
+    images?: ImagePayload[];
+    /** Quien pidió el turno desde fuera del navegador espera el texto entero. */
+    onAnswer?: (answer: string, error?: Error) => void;
+  }[] = [];
   private idleTimer: NodeJS.Timeout | null = null;
   private current: string | null = null;
   private modelConfigId: string | null = null;
@@ -682,21 +704,30 @@ class GooseSession extends EventEmitter {
     this.pump();
   }
 
-  ask(text: string, images: ImagePayload[] = []) {
-    if (this.closed) return;
+  ask(text: string, images: ImagePayload[] = [], opts: AskOpts = {}) {
+    if (this.closed) {
+      opts.onAnswer?.("", new Error("el hilo está cerrado"));
+      return;
+    }
     this.resetIdle();
     // El primer turno lleva pegada la instrucción de idioma. ACP no tiene
     // campo para el prompt de sistema y el método de goose que lo pone
     // (`session/system-prompt/set`) no está documentado; esto es explícito y
     // funciona con cualquier agente. Sin ello DeepSeek contesta en chino.
     const prefijo = this.messages.length === 0 ? IDIOMA + "\n\n" : "";
-    this.messages.push({ role: "user", text, images: images.length ? images : undefined, at: Date.now() });
+    const msg: StoredMessage = { role: "user", text, images: images.length ? images : undefined, at: Date.now() };
+    if (opts.via && opts.via !== "web") {
+      msg.via = opts.via;
+      if (opts.from) msg.from = opts.from;
+      this.emit("event", { type: "user", text, via: opts.via, from: opts.from });
+    }
+    this.messages.push(msg);
     if (this.messages.length === 1) {
       this.title = (text || "📷 imagen").slice(0, 60);
       recordTitle(this.sessionId, this.title);
     }
     this.updatedAt = Date.now();
-    this.queue.push({ text: prefijo + text, images: images.length ? images : undefined });
+    this.queue.push({ text: prefijo + text, images: images.length ? images : undefined, onAnswer: opts.onAnswer });
     this.pump();
   }
 
@@ -969,8 +1000,10 @@ class GooseSession extends EventEmitter {
       // inventar. Se marca como sin cerrar y el spinner para.
       this.cerrarToolsPendientes("cancelled");
       this.emit("event", { type: "done", stopReason: r.stopReason, usage: turnUsage });
+      item.onAnswer?.(answer);
     })()
       .catch((e) => {
+        item.onAnswer?.(answer, e);
         // El agente suele cerrar el cancel con stopReason, pero algunos cortes
         // responden al prompt con error: eso no es una falla, es el cancel.
         if (this.cancelSolicitado) {
@@ -1187,7 +1220,7 @@ export function getMessages(id: string): StoredMessage[] {
   return esElActual(id) ? (actual?.messages ?? []) : [];
 }
 
-export async function askConversation(id: string, text: string, images: ImagePayload[] = []) {
+export async function askConversation(id: string, text: string, images: ImagePayload[] = [], opts: AskOpts = {}) {
   // Mandar un mensaje a un hilo que ya no está vivo lo reabre. Antes devolvía
   // 404 y el navegador se quedaba enseñando un mensaje que nadie recibió: la
   // caja se había dormido entre que se leyó la página y se pulsó enviar.
@@ -1199,10 +1232,29 @@ export async function askConversation(id: string, text: string, images: ImagePay
     }
     if (!esElActual(id)) return false;
   }
-  actual!.ask(text, images);
+  actual!.ask(text, images, opts);
   markActivity();
   invalidarLista();
   return true;
+}
+
+/**
+ * Un turno pedido desde otro cliente (WhatsApp): cae en el hilo que esté
+ * abierto —dos clientes, una conversación— y si no hay ninguno abre uno.
+ * Resuelve con la respuesta entera del agente, que es lo que el grupo espera.
+ */
+export async function askFromChannel(text: string, via: Canal, from?: string): Promise<string> {
+  const abierto = sesionActual();
+  const id = abierto ? (abierto.sessionId ?? HILO_NUEVO) : HILO_NUEVO;
+  return new Promise<string>((resolve, reject) => {
+    void askConversation(id, text, [], {
+      via,
+      from,
+      onAnswer: (answer, error) => (error && !answer ? reject(error) : resolve(answer)),
+    }).then((ok) => {
+      if (!ok) reject(new Error("no pude abrir el hilo"));
+    });
+  });
 }
 
 /** Pide al agente que corte el turno en curso (`session/cancel`). */
@@ -1374,12 +1426,22 @@ export async function listAgentSessions(): Promise<any> {
 }
 
 /** Trae la lista del agente y la guarda. Silencioso: si falla, se queda la vieja. */
+/** Los hilos viejos quedaron titulados con la instrucción de idioma que va
+ *  pegada al primer turno. Se quita: si detrás hay algo del humano, eso es el
+ *  título; si no, se deja sin título en vez de repetir la misma frase diez veces. */
+function sinIdioma(title: string | undefined): string {
+  const t = (title ?? "").trim();
+  if (!t.startsWith(IDIOMA.slice(0, 24))) return t;
+  const resto = t.startsWith(IDIOMA) ? t.slice(IDIOMA.length) : t.slice(t.indexOf("\n") + 1);
+  return resto.trim();
+}
+
 async function refrescarHilos() {
   const remoto: any = await listAgentSessions().catch(() => null);
   if (!remoto?.sessions) return;
   hilos = remoto.sessions.map((r: any) => ({
     id: r.sessionId,
-    title: titles[r.sessionId] || r.title || "Sin título",
+    title: sinIdioma(titles[r.sessionId]) || sinIdioma(r.title) || "Sin título",
     createdAt: Date.parse(r._meta?.createdAt ?? r.updatedAt),
     // El `updatedAt` del agente se mueve cada vez que alguien ABRE el hilo:
     // ordenar por él hace bailar la lista con sólo pasear por el historial.

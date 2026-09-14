@@ -42,8 +42,10 @@ export interface Extension {
 let db: DatabaseSync | null = null;
 
 /** Se abre a la primera pregunta, no al importar: una base rota deja el chat
- *  funcionando sin extensiones en vez de tumbar el servidor entero. */
-function abrir(): DatabaseSync {
+ *  funcionando sin extensiones en vez de tumbar el servidor entero.
+ *  La misma base la usa el canal de WhatsApp (`whatsapp.ts`): una sola
+ *  conexión, cada módulo crea sus tablas. */
+export function abrir(): DatabaseSync {
   if (db) return db;
   mkdirSync(dirname(DB_PATH), { recursive: true });
   const nueva = new DatabaseSync(DB_PATH);
