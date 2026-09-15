@@ -52,8 +52,31 @@ export interface WaState {
   error: string | null;
 }
 
-const estado: WaState = { phase: "disconnected", qr: null, pairingCode: null, me: null, error: null };
-const emisor = new EventEmitter();
+// Todo lo vivo del canal cuelga de globalThis: en dev, Vite recarga este módulo al tocar
+// cualquier ruta que lo importe, y un módulo nuevo con `sock = null` abría un segundo
+// socket con las mismas credenciales — WhatsApp los echa a los dos en bucle (440 conflict).
+const g = globalThis as any;
+const vivo: {
+  estado: WaState;
+  emisor: EventEmitter;
+  sock: WASocket | null;
+  reintentos: number;
+  telefonoPendiente: string | null;
+  nuestros: Set<string>;
+  rehidratado: boolean;
+  gruposAt: number;
+} = (g.__wa ??= {
+  estado: { phase: "disconnected", qr: null, pairingCode: null, me: null, error: null },
+  emisor: new EventEmitter(),
+  sock: null,
+  reintentos: 0,
+  telefonoPendiente: null,
+  nuestros: new Set(),
+  rehidratado: false,
+  gruposAt: 0,
+});
+const estado = vivo.estado;
+const emisor = vivo.emisor;
 emisor.setMaxListeners(50);
 
 function setEstado(patch: Partial<WaState>) {
@@ -72,12 +95,12 @@ export function subscribeWa(fn: (s: WaState) => void) {
 
 // Un logger callado: Baileys es ruidoso y aquí sólo importa lo que decidimos loguear.
 const silencio: any = {
-  level: "silent",
+  level: "warn",
   trace() {},
   debug() {},
   info() {},
-  warn() {},
-  error() {},
+  warn(o: unknown, m?: string) { console.warn("[baileys]", m ?? "", typeof o === "object" ? JSON.stringify(o).slice(0, 200) : o); },
+  error(o: unknown, m?: string) { console.error("[baileys]", m ?? "", typeof o === "object" ? JSON.stringify(o).slice(0, 200) : o); },
   child() {
     return silencio;
   },
@@ -189,10 +212,10 @@ function grupoActivo(jid: string): boolean {
 }
 
 // La lista de grupos del teléfono se pide una vez por minuto, nunca en el poll.
-let gruposAt = 0;
 async function refrescarGrupos() {
-  if (!sock || estado.phase !== "connected" || Date.now() - gruposAt < 60_000) return;
-  gruposAt = Date.now();
+  const sock = vivo.sock;
+  if (!sock || estado.phase !== "connected" || Date.now() - vivo.gruposAt < 60_000) return;
+  vivo.gruposAt = Date.now();
   try {
     const todos = await sock.groupFetchAllParticipating();
     for (const g of Object.values(todos)) verGrupo(g.id, g.subject);
@@ -209,22 +232,19 @@ export async function gruposConRefresco(): Promise<WaGroup[]> {
 // ---------------------------------------------------------------------------
 // El socket
 // ---------------------------------------------------------------------------
-let sock: WASocket | null = null;
-let reintentos = 0;
-let telefonoPendiente: string | null = null;
 /** Ids de los mensajes que mandamos nosotros: no se contestan a sí mismos. */
-const nuestros = new Set<string>();
+const nuestros = vivo.nuestros;
 
 const conCarrera = <T>(p: Promise<T>, ms: number, fallback: T) =>
   Promise.race([p, new Promise<T>((r) => setTimeout(() => r(fallback), ms))]);
 
 async function abrirSocket() {
-  if (sock) {
+  if (vivo.sock) {
     try {
-      sock.ev.removeAllListeners("connection.update");
-      sock.end(undefined);
+      vivo.sock.ev.removeAllListeners("connection.update");
+      vivo.sock.end(undefined);
     } catch {}
-    sock = null;
+    vivo.sock = null;
   }
   setEstado({ phase: "connecting", qr: null, pairingCode: null, error: null });
 
@@ -240,18 +260,20 @@ async function abrirSocket() {
     markOnlineOnConnect: false,
     syncFullHistory: false,
   });
-  sock = s;
+  vivo.sock = s;
 
   s.ev.on("creds.update", auth.saveCreds);
 
   s.ev.on("connection.update", async (u) => {
+    // Un socket reemplazado ya no manda: sus cierres no reconectan.
+    if (vivo.sock !== s) return;
     if (u.qr) {
       const qr = await QRCode.toDataURL(u.qr, { margin: 1, width: 320 });
-      setEstado({ phase: telefonoPendiente ? "pairing" : "qr_pending", qr, error: null });
+      setEstado({ phase: vivo.telefonoPendiente ? "pairing" : "qr_pending", qr, error: null });
     }
     if (u.connection === "open") {
-      reintentos = 0;
-      telefonoPendiente = null;
+      vivo.reintentos = 0;
+      vivo.telefonoPendiente = null;
       const me = s.user ? { id: s.user.id, name: s.user.name } : null;
       setEstado({ phase: "connected", qr: null, pairingCode: null, me, error: null });
       console.log("[wa] conectado como", me?.id);
@@ -269,30 +291,31 @@ async function abrirSocket() {
       }
       if (code === DisconnectReason.loggedOut) {
         borrarAuth();
-        sock = null;
+        vivo.sock = null;
         setEstado({ phase: "disconnected", qr: null, pairingCode: null, me: null, error: "El teléfono cerró la sesión." });
         return;
       }
-      if (reintentos >= 5) {
-        sock = null;
+      if (vivo.reintentos >= 5) {
+        vivo.sock = null;
         setEstado({ phase: "failed", qr: null, pairingCode: null, error: `No pude reconectar (${code ?? "?"} ${msg}).` });
         return;
       }
-      const espera = Math.min(30_000, 2 ** reintentos * 1000);
-      reintentos++;
+      const espera = Math.min(30_000, 2 ** vivo.reintentos * 1000);
+      vivo.reintentos++;
       setEstado({ phase: "connecting", qr: null, pairingCode: null, error: null });
       setTimeout(() => void abrirSocket().catch(fallo), espera);
     }
   });
 
   s.ev.on("messages.upsert", ({ type, messages }) => {
+    console.log("[wa] upsert", type, messages.map((m) => `${m.key.remoteJid} ${Object.keys(m.message ?? {})[0] ?? m.messageStubType ?? "?"}`).join(" | "));
     if (type !== "notify") return;
     for (const m of messages) void recibir(m).catch((e) => console.warn("[wa] recibir:", e.message));
   });
 
   // Código por número: sólo si no hay registro previo, y 1.5 s después de crear el socket.
-  if (telefonoPendiente && !auth.creds.registered) {
-    const tel = telefonoPendiente;
+  if (vivo.telefonoPendiente && !auth.creds.registered) {
+    const tel = vivo.telefonoPendiente;
     setTimeout(async () => {
       try {
         const code = await s.requestPairingCode(tel);
@@ -311,8 +334,8 @@ function fallo(e: Error) {
 
 /** Abre el handshake por QR. Pedir uno cancela al otro: son el mismo handshake. */
 export async function connect() {
-  telefonoPendiente = null;
-  reintentos = 0;
+  vivo.telefonoPendiente = null;
+  vivo.reintentos = 0;
   await abrirSocket().catch(fallo);
 }
 
@@ -320,15 +343,15 @@ export async function connect() {
 export async function pair(phone: string) {
   const tel = phone.replace(/\D/g, "");
   if (tel.length < 8) throw new Error("El número va con lada y sólo dígitos, por ejemplo 5215512345678.");
-  telefonoPendiente = tel;
-  reintentos = 0;
+  vivo.telefonoPendiente = tel;
+  vivo.reintentos = 0;
   await abrirSocket().catch(fallo);
 }
 
 export async function disconnect() {
-  telefonoPendiente = null;
-  const s = sock;
-  sock = null;
+  vivo.telefonoPendiente = null;
+  const s = vivo.sock;
+  vivo.sock = null;
   try {
     await s?.logout();
   } catch {}
@@ -340,11 +363,10 @@ export async function disconnect() {
 }
 
 /** Al primer request reconecta si hay credenciales: un reinicio no pide escanear. */
-let rehidratado = false;
 export function rehidratar() {
-  if (rehidratado) return;
-  rehidratado = true;
-  if (hayCredenciales() && !sock) {
+  if (vivo.rehidratado) return;
+  vivo.rehidratado = true;
+  if (hayCredenciales() && !vivo.sock) {
     console.log("[wa] credenciales guardadas: reconecto");
     void abrirSocket().catch(fallo);
   }
@@ -367,14 +389,16 @@ const RAFAGA_MS = 1_500;
 async function recibir(m: WAMessage) {
   const jid = m.key.remoteJid ?? "";
   if (!jid.endsWith("@g.us")) return;
-  if (m.key.fromMe || (m.key.id && nuestros.has(m.key.id))) return;
+  // No se filtra `fromMe`: el dueño del número también le habla al agente desde su
+  // teléfono. Lo que sí se ignora es lo que mandó esta app (ids en `nuestros`).
+  if (m.key.id && nuestros.has(m.key.id)) return;
   const msg = m.message;
   if (!msg) return;
 
   verGrupo(jid);
   if (!grupoActivo(jid)) return;
 
-  const from = m.pushName || m.key.participant?.split("@")[0] || "alguien";
+  const from = m.pushName || (m.key.fromMe ? estado.me?.name : null) || m.key.participant?.split("@")[0] || "alguien";
   let text = msg.conversation ?? msg.extendedTextMessage?.text ?? "";
   const images: ImagePayload[] = [];
 
@@ -410,8 +434,8 @@ function encolar(jid: string, item: Entrante) {
 async function despachar(jid: string) {
   const r = rafagas.get(jid);
   rafagas.delete(jid);
-  if (!r || !sock) return;
-  const s = sock;
+  if (!r || !vivo.sock) return;
+  const s = vivo.sock;
   const items = r.items;
   const ultimo = items[items.length - 1];
   const from = items.length === 1 ? items[0].from : [...new Set(items.map((i) => i.from))].join(", ");

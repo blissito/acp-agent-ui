@@ -186,6 +186,7 @@ export default function WhatsApp() {
                     <span className="truncate font-mono text-[11px] text-text-tertiary">{g.jid}</span>
                   </div>
                   <Switch
+                    variant="mono"
                     checked={g.enabled}
                     onCheckedChange={(v) => void mutar({ intent: "group", jid: g.jid, enabled: v })}
                   />
