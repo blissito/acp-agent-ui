@@ -139,7 +139,9 @@ const escribir = (name: string, value: unknown) =>
     .run(name, JSON.stringify(value, BufferJSON.replacer));
 const borrar = (name: string) => db().prepare("DELETE FROM whatsapp_auth WHERE name = ?").run(name);
 
-const hayCredenciales = () => Boolean(leer("creds")?.registered);
+// Baileys 7 no pone `registered` al vincular por QR: la prueba de que hay sesión es `me`.
+const vinculadas = (c: any) => Boolean(c?.me?.id || c?.registered);
+const hayCredenciales = () => vinculadas(leer("creds"));
 
 /** El estado de auth que Baileys pide, sobre sqlite. Las llaves de señal llegan a ráfagas
  *  en el pairing y se escriben con debounce de 600 ms; sin él el handshake se rompe. */
@@ -317,7 +319,7 @@ async function abrirSocket() {
   });
 
   // Código por número: sólo si no hay registro previo, y 1.5 s después de crear el socket.
-  if (vivo.telefonoPendiente && !auth.creds.registered) {
+  if (vivo.telefonoPendiente && !vinculadas(auth.creds)) {
     const tel = vivo.telefonoPendiente;
     setTimeout(async () => {
       try {
