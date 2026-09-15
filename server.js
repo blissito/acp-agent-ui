@@ -33,4 +33,11 @@ app.use(
 
 app.listen(PORT, "0.0.0.0", () => {
   console.log(`[web3] http://localhost:${PORT}`);
+  // El canal de WhatsApp reconecta con sus credenciales guardadas al primer request a su
+  // ruta; tras un reinicio nadie lo hace, así que el servidor se lo pide a sí mismo.
+  setTimeout(() => {
+    fetch(`http://127.0.0.1:${PORT}/api/whatsapp`).catch((e) =>
+      console.warn("[web3] no pude rehidratar WhatsApp:", e.message),
+    );
+  }, 1500);
 });
