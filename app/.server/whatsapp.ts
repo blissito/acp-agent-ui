@@ -412,6 +412,19 @@ async function recibir(m: WAMessage) {
     text = msg.imageMessage.caption ?? text;
   }
 
+  if (msg.audioMessage) {
+    // Una nota de voz se descifra y se transcribe en la caja (Whisper local); el texto
+    // entra al turno marcado como voz para que el agente sepa que lo oyó, no lo leyó.
+    const buf = await downloadMediaMessage(m, "buffer", {});
+    try {
+      const t = await transcribir(buf, msg.audioMessage.mimetype ?? "audio/ogg");
+      text = `🎤 ${t}`;
+    } catch (e) {
+      console.warn("[wa] transcribir:", (e as Error).message);
+      text = "🎤 (nota de voz que no pude transcribir)";
+    }
+  }
+
   if (msg.reactionMessage) {
     // Una reacción sólo cuenta si apunta a un mensaje nuestro.
     const objetivo = msg.reactionMessage.key?.id;
@@ -510,6 +523,23 @@ export async function cambiarFotoDeGrupo(jid: string | null | undefined, image: 
 }
 
 const UN_EMOJI = /^\p{Extended_Pictographic}️?$/u;
+
+// Whisper local: un servicio de la caja (oido.service), no un MCP; el canal lo usa directo.
+const OIDO_URL = process.env.OIDO_URL ?? "http://127.0.0.1:4125/transcribe";
+
+async function transcribir(audio: Buffer, mimeType: string): Promise<string> {
+  const r = await fetch(`${OIDO_URL}?lang=es`, {
+    method: "POST",
+    headers: { "content-type": mimeType },
+    body: new Uint8Array(audio),
+    signal: AbortSignal.timeout(120_000),
+  });
+  if (!r.ok) throw new Error(`oído contestó ${r.status}`);
+  const j = (await r.json()) as { text?: string };
+  const t = (j.text ?? "").trim();
+  if (!t) throw new Error("transcripción vacía");
+  return t;
+}
 
 async function responder(
   s: WASocket,
