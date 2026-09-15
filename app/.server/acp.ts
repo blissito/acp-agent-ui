@@ -5,7 +5,7 @@
  * caja de EasyBits. El navegador nunca habla ACP: consume los eventos por SSE.
  */
 import { randomUUID } from "node:crypto";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { EventEmitter } from "node:events";
 import { client } from "@agentclientprotocol/sdk";
@@ -454,6 +454,9 @@ export interface AskOpts {
   onAnswer?: OnAnswer;
 }
 
+/** Rutas de audio que una tool deja escritas en su texto (el MCP de voz: /data/voz/<id>.ogg). */
+const AUDIO_EN_TEXTO = new RegExp(`${(process.env.AUDIO_DIR ?? "/data/voz").replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}/[\\w-]+\\.(ogg|opus|mp3|m4a|wav)`, "g");
+
 /** Las imágenes y audios que trae un `tool_call_update` de una extensión, ya colgados
  *  del último mensaje del agente. Vacío si la tool no es `mcp:`. */
 function mediaDeTool(msgs: StoredMessage[], u: any): { images: ImagePayload[]; audios: ImagePayload[] } {
@@ -476,6 +479,18 @@ function mediaDeTool(msgs: StoredMessage[], u: any): { images: ImagePayload[]; a
     if (typeof b?.data !== "string" || !b.data) continue;
     if (b.type === "image") images.push({ mimeType: b.mimeType ?? "image/png", data: b.data });
     else if (b.type === "audio") audios.push({ mimeType: b.mimeType ?? "audio/ogg", data: b.data });
+  }
+  // claude-acp reenvía `image` pero convierte `audio` en texto. Como la app corre en la
+  // misma caja que el MCP de voz, el archivo que éste nombra en el texto se lee del disco.
+  for (const c of u.content) {
+    const b = c?.type === "content" ? c.content : c;
+    if (b?.type !== "text" || typeof b.text !== "string") continue;
+    for (const ruta of b.text.match(AUDIO_EN_TEXTO) ?? []) {
+      if (!existsSync(ruta)) continue;
+      try {
+        audios.push({ mimeType: "audio/ogg", data: readFileSync(ruta).toString("base64") });
+      } catch {}
+    }
   }
   if (last?.role === "assistant") {
     if (images.length) (last.images ??= []).push(...images);
