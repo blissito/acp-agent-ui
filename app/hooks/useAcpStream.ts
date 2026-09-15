@@ -34,6 +34,9 @@ export interface Turn {
   tools?: ToolEntry[];
   images?: ImagePayload[];
   usage?: { used: number; size: number; cost: number };
+  /** Por dónde entró, si no fue por esta pantalla (WhatsApp). */
+  via?: string;
+  from?: string;
 }
 
 export interface Usage {
@@ -113,6 +116,18 @@ export function useAcpStream(
     es.addEventListener("chunk", (e) => appendChunk(JSON.parse((e as MessageEvent).data).text));
     es.addEventListener("thought", (e) => appendThought(JSON.parse((e as MessageEvent).data).text));
     es.addEventListener("tool", (e) => upsertTool(JSON.parse((e as MessageEvent).data)));
+    // Un turno que entró por otro canal: se pinta etiquetado y abre respuesta nueva.
+    es.addEventListener("user", (e) => {
+      const u = JSON.parse((e as MessageEvent).data) as { text: string; via: string; from?: string; images?: ImagePayload[] };
+      streaming.current = false;
+      setBusy(true);
+      setTurns((prev) => [...prev, { role: "user", text: u.text, images: u.images, via: u.via, from: u.from }]);
+    });
+    // Una imagen que devolvió una herramienta: cuelga del mensaje del agente.
+    es.addEventListener("image", (e) => {
+      const { image } = JSON.parse((e as MessageEvent).data) as { image: ImagePayload };
+      patchCurrent((t) => ({ ...t, images: [...(t.images ?? []), image] }));
+    });
     es.addEventListener("usage", (e) => {
       const u = JSON.parse((e as MessageEvent).data) as Usage;
       setUsage(u);

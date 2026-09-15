@@ -24,6 +24,7 @@ import {
   Globe,
   ListChecks,
   Loader2,
+  MessageCircle,
   Search,
   Terminal,
   Wrench,
@@ -38,11 +39,15 @@ const plano = (m: {
   text: string;
   images?: any[];
   tools?: any[];
+  via?: string;
+  from?: string;
 }) => ({
   role: m.role,
   text: m.text,
   images: m.images,
   tools: m.tools,
+  via: m.via,
+  from: m.from,
 });
 
 export async function loader({ params }: Route.LoaderArgs) {
@@ -95,6 +100,13 @@ function Bubble({ turn }: { turn: Turn }) {
             </div>
           )}
           {turn.text}
+          {turn.via && (
+            <span className="mt-1.5 flex items-center gap-1 text-[11px] opacity-70">
+              <MessageCircle className="h-3 w-3" />
+              {turn.from ? `${turn.from} · ` : ""}
+              {turn.via}
+            </span>
+          )}
         </div>
       </div>
     );
@@ -115,6 +127,18 @@ function Bubble({ turn }: { turn: Turn }) {
             <ToolRow key={tool.id} tool={tool} />
           ))}
         </ul>
+      )}
+      {turn.images && turn.images.length > 0 && (
+        <div className="mb-3 flex flex-wrap gap-2">
+          {turn.images.map((im, i) => (
+            <img
+              key={i}
+              src={`data:${im.mimeType};base64,${im.data}`}
+              alt="Imagen generada por una herramienta"
+              className="max-h-80 max-w-full rounded-xl border border-border-primary object-contain"
+            />
+          ))}
+        </div>
       )}
       {turn.text && <Markdown>{turn.text}</Markdown>}
       {turn.usage && <MessageUsageStats {...turn.usage} />}

@@ -177,7 +177,19 @@ export type AcpEvent =
   // Por dónde va la conexión, para que la UI no diga "Conectando…" a secas
   // durante los ~15s que tarda despertar una caja dormida.
   | { type: "status"; phase: ConnectPhase }
+  // Un turno que entró por otro canal (WhatsApp): el navegador lo pinta etiquetado.
+  | { type: "user"; text: string; via: Canal; from?: string; images?: ImagePayload[] }
+  // Una imagen que devolvió una herramienta MCP: cuelga del mensaje del agente.
+  | { type: "image"; image: ImagePayload }
   | { type: "closed" };
+
+/** Por dónde entró un turno. El chat web es un canal más. */
+export type Canal = "web" | "whatsapp";
+
+/** Modo con el que se abre cada hilo. Con claude-acp, cualquier otro cuelga las
+ *  herramientas: ghosty reenvía `session/request_permission` pero al contestar tira
+ *  "No task waiting for confirmation" y la tool nunca vuelve. */
+const MODE = process.env.ACP_MODE ?? "auto";
 
 
 // Un handshake que no responde no debe dejar la UI esperando para siempre:
@@ -192,6 +204,10 @@ export interface StoredMessage {
    *  sólo se emiten al vivo: si no, al reabrir el hilo la conversación
    *  aparece sin rastro de lo que el agente hizo. */
   tools?: ToolEntry[];
+  /** Por dónde entró (sólo se guarda si no fue por la web). */
+  via?: Canal;
+  /** Quién lo escribió en ese canal. */
+  from?: string;
   at: number;
 }
 
@@ -426,6 +442,34 @@ function conexionPerdida(e: Error): boolean {
   return sesionPerdida(e) || e?.message === CONEXION_CORTADA;
 }
 
+/** Se llama una vez al cerrar el turno, con todo el texto y las imágenes. */
+export type OnAnswer = (answer: string, error: Error | null, images: ImagePayload[]) => void;
+
+export interface AskOpts {
+  via?: Canal;
+  from?: string;
+  onAnswer?: OnAnswer;
+}
+
+/** Las imágenes que trae un `tool_call_update` de una extensión, ya colgadas
+ *  del último mensaje del agente. Vacío si la tool no es `mcp:`. */
+function imagenesDeTool(msgs: StoredMessage[], u: any): ImagePayload[] {
+  if (u?.sessionUpdate !== "tool_call_update" || !Array.isArray(u.content)) return [];
+  const last = msgs[msgs.length - 1];
+  const tool = last?.tools?.find((t) => t.id === u.toolCallId);
+  const title = u.title ?? tool?.title ?? "";
+  if (!/^mcp:/i.test(title)) return [];
+  const out: ImagePayload[] = [];
+  for (const c of u.content) {
+    const im = c?.type === "content" ? c.content : c;
+    if (im?.type === "image" && typeof im.data === "string" && im.data) {
+      out.push({ mimeType: im.mimeType ?? "image/png", data: im.data });
+    }
+  }
+  if (out.length && last?.role === "assistant") (last.images ??= []).push(...out);
+  return out;
+}
+
 class SesionCruda {
   private cola: any[] = [];
   private esperando: ((m: any) => void) | null = null;
@@ -504,7 +548,7 @@ class GooseSession extends EventEmitter {
   private started = false;
   private conn: any = null;
   private session: any = null;
-  private queue: { text: string; images?: ImagePayload[] }[] = [];
+  private queue: { text: string; images?: ImagePayload[]; onAnswer?: OnAnswer }[] = [];
   private idleTimer: NodeJS.Timeout | null = null;
   private current: string | null = null;
   private modelConfigId: string | null = null;
@@ -640,7 +684,7 @@ class GooseSession extends EventEmitter {
       // frontera de turno para no partir un par tool-request/response. Sólo
       // acelera la carga del hilo: el contexto que el agente le pasa al modelo
       // no cambia. Apagado por defecto; se enciende con ACP_REPLAY_TAIL.
-      await ctx.request("session/load", {
+      const cargado: any = await ctx.request("session/load", {
         sessionId: this.resumeSessionId,
         cwd: this.cwd,
         // En `session/load` los servidores se SUMAN a los que el Agente ya
@@ -651,6 +695,7 @@ class GooseSession extends EventEmitter {
       });
       this.replaying = false;
       this.sessionId = this.resumeSessionId;
+      await this.ponerModo(cargado?.modes);
       // El SDK sólo entrega su sesión "activa" cuando nace de un `session/new`;
       // un hilo reabierto habla por el canal crudo.
       this.session = new SesionCruda(this.conn, this.resumeSessionId) as any;
@@ -671,6 +716,7 @@ class GooseSession extends EventEmitter {
         this.session = await ctx.buildSession({ cwd: this.cwd, mcpServers: [] }).start();
       }
       this.sessionId = this.session.sessionId;
+      await this.ponerModo(this.session?.newSessionResponse?.modes);
     }
     this.ready = true;
     this.applyModelOptions(this.session?.newSessionResponse?.configOptions);
@@ -682,21 +728,47 @@ class GooseSession extends EventEmitter {
     this.pump();
   }
 
-  ask(text: string, images: ImagePayload[] = []) {
-    if (this.closed) return;
+  /** Deja el hilo en `MODE` si el agente ofrece modos y no está ya en él. */
+  private async ponerModo(modes: any) {
+    if (!MODE || !modes || modes.currentModeId === MODE) return;
+    const hay = (modes.availableModes ?? []).some((m: any) => (m.id ?? m.modeId) === MODE);
+    if (!hay) return;
+    try {
+      await conTimeout(
+        this.conn.agent.request("session/set_mode", { sessionId: this.sessionId, modeId: MODE }),
+        10_000,
+      );
+      console.log(`[acp] modo ${modes.currentModeId} → ${MODE}`);
+    } catch (e) {
+      console.warn("[acp] session/set_mode:", (e as Error).message);
+    }
+  }
+
+  ask(text: string, images: ImagePayload[] = [], opts: AskOpts = {}) {
+    if (this.closed) {
+      opts.onAnswer?.("", new Error("el hilo ya está cerrado"), []);
+      return;
+    }
     this.resetIdle();
     // El primer turno lleva pegada la instrucción de idioma. ACP no tiene
     // campo para el prompt de sistema y el método de goose que lo pone
     // (`session/system-prompt/set`) no está documentado; esto es explícito y
     // funciona con cualquier agente. Sin ello DeepSeek contesta en chino.
     const prefijo = this.messages.length === 0 ? IDIOMA + "\n\n" : "";
-    this.messages.push({ role: "user", text, images: images.length ? images : undefined, at: Date.now() });
+    const msg: StoredMessage = { role: "user", text, images: images.length ? images : undefined, at: Date.now() };
+    if (opts.via && opts.via !== "web") {
+      msg.via = opts.via;
+      msg.from = opts.from;
+      // El navegador no mandó este turno: se le avisa para que lo pinte.
+      this.emit("event", { type: "user", text, via: opts.via, from: opts.from, images: msg.images });
+    }
+    this.messages.push(msg);
     if (this.messages.length === 1) {
       this.title = (text || "📷 imagen").slice(0, 60);
       recordTitle(this.sessionId, this.title);
     }
     this.updatedAt = Date.now();
-    this.queue.push({ text: prefijo + text, images: images.length ? images : undefined });
+    this.queue.push({ text: prefijo + text, images: images.length ? images : undefined, onAnswer: opts.onAnswer });
     this.pump();
   }
 
@@ -859,6 +931,8 @@ class GooseSession extends EventEmitter {
     const item = this.queue.shift()!;
     let turnUsage: unknown = null;
     let answer = "";
+    // Las imágenes que devuelven las herramientas de extensiones en este turno.
+    const imagenes: ImagePayload[] = [];
 
     (async () => {
       // Una imagen contra un modelo sin visión no falla de forma legible: el
@@ -926,6 +1000,13 @@ class GooseSession extends EventEmitter {
           upsertTool(this.messages, entry as ToolEntry);
           trasHerramienta = true;
           this.emit("event", ev);
+          // Las imágenes viajan por ACP en `tool_call_update.content[]`. Sólo cuentan
+          // las de extensiones (`mcp:`): un `Read` de un PNG también devuelve imagen,
+          // pero ésa la leyó el agente, no la generó.
+          for (const im of imagenesDeTool(this.messages, u)) {
+            imagenes.push(im);
+            this.emit("event", { type: "image", image: im });
+          }
         } else if (u.sessionUpdate === "config_option_update") {
           this.applyModelOptions(u.configOptions);
         } else if (u.sessionUpdate === "usage_update") {
@@ -969,6 +1050,7 @@ class GooseSession extends EventEmitter {
       // inventar. Se marca como sin cerrar y el spinner para.
       this.cerrarToolsPendientes("cancelled");
       this.emit("event", { type: "done", stopReason: r.stopReason, usage: turnUsage });
+      item.onAnswer?.(answer, null, imagenes);
     })()
       .catch((e) => {
         // El agente suele cerrar el cancel con stopReason, pero algunos cortes
@@ -976,9 +1058,11 @@ class GooseSession extends EventEmitter {
         if (this.cancelSolicitado) {
           this.cerrarToolsPendientes("cancelled");
           this.emit("event", { type: "done", stopReason: "cancelled", usage: null });
+          item.onAnswer?.(answer, new Error("turno cortado"), imagenes);
         } else {
           this.cerrarToolsPendientes("failed");
           this.emit("event", { type: "error", message: e.message });
+          item.onAnswer?.(answer, e, imagenes);
         }
       })
       .finally(() => {
@@ -1203,6 +1287,35 @@ export async function askConversation(id: string, text: string, images: ImagePay
   markActivity();
   invalidarLista();
   return true;
+}
+
+/**
+ * Un turno que llega por otro canal. Va al hilo abierto —una sola sesión viva:
+ * dos clientes, una conversación— o abre uno nuevo si no hay ninguno. Resuelve
+ * con el texto entero y las imágenes que devolvieron las herramientas.
+ */
+export async function askFromChannel(
+  text: string,
+  via: Canal,
+  from?: string,
+  images: ImagePayload[] = [],
+): Promise<{ text: string; images: ImagePayload[] }> {
+  let s = sesionActual();
+  if (!s || !s.ready) s = await abrirHilo(s?.sessionId ?? HILO_NUEVO);
+  markActivity();
+  invalidarLista();
+  return new Promise((resolve, reject) => {
+    s!.ask(text, images, {
+      via,
+      from,
+      onAnswer: (answer, error, imgs) => {
+        markActivity();
+        // Con texto ya escrito, un error de cierre no borra la respuesta.
+        if (error && !answer && !imgs.length) reject(error);
+        else resolve({ text: answer, images: imgs });
+      },
+    });
+  });
 }
 
 /** Pide al agente que corte el turno en curso (`session/cancel`). */

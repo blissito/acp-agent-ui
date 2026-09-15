@@ -41,6 +41,9 @@ export interface Extension {
 
 let db: DatabaseSync | null = null;
 
+/** La misma base para lo demás que necesite filas (la sesión de WhatsApp). */
+export const abrirDb = () => abrir();
+
 /** Se abre a la primera pregunta, no al importar: una base rota deja el chat
  *  funcionando sin extensiones en vez de tumbar el servidor entero. */
 function abrir(): DatabaseSync {
