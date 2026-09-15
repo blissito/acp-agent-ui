@@ -463,6 +463,12 @@ function mediaDeTool(msgs: StoredMessage[], u: any): { images: ImagePayload[]; a
   const tool = last?.tools?.find((t) => t.id === u.toolCallId);
   const title = u.title ?? tool?.title ?? "";
   if (!/^mcp:/i.test(title)) return vacio;
+  // Qué devuelve de verdad el adaptador: la spec de ACP admite image/audio/resource,
+  // pero cada agente reenvía lo que quiere. El log es la única prueba.
+  console.log(
+    `[acp] ${title} →`,
+    u.content.map((c: any) => (c?.type === "content" ? `content/${c.content?.type}` : c?.type)).join(", "),
+  );
   const images: ImagePayload[] = [];
   const audios: ImagePayload[] = [];
   for (const c of u.content) {
