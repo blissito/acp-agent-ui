@@ -38,6 +38,7 @@ const plano = (m: {
   role: "user" | "assistant";
   text: string;
   images?: any[];
+  audios?: any[];
   tools?: any[];
   via?: string;
   from?: string;
@@ -45,6 +46,7 @@ const plano = (m: {
   role: m.role,
   text: m.text,
   images: m.images,
+  audios: m.audios,
   tools: m.tools,
   via: m.via,
   from: m.from,
@@ -137,6 +139,13 @@ function Bubble({ turn }: { turn: Turn }) {
               alt="Imagen generada por una herramienta"
               className="max-h-80 max-w-full rounded-xl border border-border-primary object-contain"
             />
+          ))}
+        </div>
+      )}
+      {turn.audios && turn.audios.length > 0 && (
+        <div className="mb-3 flex flex-col gap-2">
+          {turn.audios.map((au, i) => (
+            <audio key={i} controls src={`data:${au.mimeType};base64,${au.data}`} className="max-w-full" />
           ))}
         </div>
       )}

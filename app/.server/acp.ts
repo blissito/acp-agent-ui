@@ -179,8 +179,9 @@ export type AcpEvent =
   | { type: "status"; phase: ConnectPhase }
   // Un turno que entró por otro canal (WhatsApp): el navegador lo pinta etiquetado.
   | { type: "user"; text: string; via: Canal; from?: string; images?: ImagePayload[] }
-  // Una imagen que devolvió una herramienta MCP: cuelga del mensaje del agente.
+  // Una imagen o un audio que devolvió una herramienta MCP: cuelga del mensaje del agente.
   | { type: "image"; image: ImagePayload }
+  | { type: "audio"; audio: ImagePayload }
   | { type: "closed" };
 
 /** Por dónde entró un turno. El chat web es un canal más. */
@@ -200,6 +201,8 @@ export interface StoredMessage {
   role: "user" | "assistant";
   text: string;
   images?: ImagePayload[];
+  /** Audios que devolvieron las herramientas (mismo par base64 + mime). */
+  audios?: ImagePayload[];
   /** Las herramientas que usó el agente en este turno. Se guardan aquí y no
    *  sólo se emiten al vivo: si no, al reabrir el hilo la conversación
    *  aparece sin rastro de lo que el agente hizo. */
@@ -443,7 +446,7 @@ function conexionPerdida(e: Error): boolean {
 }
 
 /** Se llama una vez al cerrar el turno, con todo el texto y las imágenes. */
-export type OnAnswer = (answer: string, error: Error | null, images: ImagePayload[]) => void;
+export type OnAnswer = (answer: string, error: Error | null, images: ImagePayload[], audios: ImagePayload[]) => void;
 
 export interface AskOpts {
   via?: Canal;
@@ -451,23 +454,28 @@ export interface AskOpts {
   onAnswer?: OnAnswer;
 }
 
-/** Las imágenes que trae un `tool_call_update` de una extensión, ya colgadas
+/** Las imágenes y audios que trae un `tool_call_update` de una extensión, ya colgados
  *  del último mensaje del agente. Vacío si la tool no es `mcp:`. */
-function imagenesDeTool(msgs: StoredMessage[], u: any): ImagePayload[] {
-  if (u?.sessionUpdate !== "tool_call_update" || !Array.isArray(u.content)) return [];
+function mediaDeTool(msgs: StoredMessage[], u: any): { images: ImagePayload[]; audios: ImagePayload[] } {
+  const vacio = { images: [], audios: [] };
+  if (u?.sessionUpdate !== "tool_call_update" || !Array.isArray(u.content)) return vacio;
   const last = msgs[msgs.length - 1];
   const tool = last?.tools?.find((t) => t.id === u.toolCallId);
   const title = u.title ?? tool?.title ?? "";
-  if (!/^mcp:/i.test(title)) return [];
-  const out: ImagePayload[] = [];
+  if (!/^mcp:/i.test(title)) return vacio;
+  const images: ImagePayload[] = [];
+  const audios: ImagePayload[] = [];
   for (const c of u.content) {
-    const im = c?.type === "content" ? c.content : c;
-    if (im?.type === "image" && typeof im.data === "string" && im.data) {
-      out.push({ mimeType: im.mimeType ?? "image/png", data: im.data });
-    }
+    const b = c?.type === "content" ? c.content : c;
+    if (typeof b?.data !== "string" || !b.data) continue;
+    if (b.type === "image") images.push({ mimeType: b.mimeType ?? "image/png", data: b.data });
+    else if (b.type === "audio") audios.push({ mimeType: b.mimeType ?? "audio/ogg", data: b.data });
   }
-  if (out.length && last?.role === "assistant") (last.images ??= []).push(...out);
-  return out;
+  if (last?.role === "assistant") {
+    if (images.length) (last.images ??= []).push(...images);
+    if (audios.length) (last.audios ??= []).push(...audios);
+  }
+  return { images, audios };
 }
 
 class SesionCruda {
@@ -746,7 +754,7 @@ class GooseSession extends EventEmitter {
 
   ask(text: string, images: ImagePayload[] = [], opts: AskOpts = {}) {
     if (this.closed) {
-      opts.onAnswer?.("", new Error("el hilo ya está cerrado"), []);
+      opts.onAnswer?.("", new Error("el hilo ya está cerrado"), [], []);
       return;
     }
     this.resetIdle();
@@ -933,6 +941,7 @@ class GooseSession extends EventEmitter {
     let answer = "";
     // Las imágenes que devuelven las herramientas de extensiones en este turno.
     const imagenes: ImagePayload[] = [];
+    const audios: ImagePayload[] = [];
 
     (async () => {
       // Una imagen contra un modelo sin visión no falla de forma legible: el
@@ -1003,9 +1012,14 @@ class GooseSession extends EventEmitter {
           // Las imágenes viajan por ACP en `tool_call_update.content[]`. Sólo cuentan
           // las de extensiones (`mcp:`): un `Read` de un PNG también devuelve imagen,
           // pero ésa la leyó el agente, no la generó.
-          for (const im of imagenesDeTool(this.messages, u)) {
+          const media = mediaDeTool(this.messages, u);
+          for (const im of media.images) {
             imagenes.push(im);
             this.emit("event", { type: "image", image: im });
+          }
+          for (const au of media.audios) {
+            audios.push(au);
+            this.emit("event", { type: "audio", audio: au });
           }
         } else if (u.sessionUpdate === "config_option_update") {
           this.applyModelOptions(u.configOptions);
@@ -1050,7 +1064,7 @@ class GooseSession extends EventEmitter {
       // inventar. Se marca como sin cerrar y el spinner para.
       this.cerrarToolsPendientes("cancelled");
       this.emit("event", { type: "done", stopReason: r.stopReason, usage: turnUsage });
-      item.onAnswer?.(answer, null, imagenes);
+      item.onAnswer?.(answer, null, imagenes, audios);
     })()
       .catch((e) => {
         // El agente suele cerrar el cancel con stopReason, pero algunos cortes
@@ -1058,11 +1072,11 @@ class GooseSession extends EventEmitter {
         if (this.cancelSolicitado) {
           this.cerrarToolsPendientes("cancelled");
           this.emit("event", { type: "done", stopReason: "cancelled", usage: null });
-          item.onAnswer?.(answer, new Error("turno cortado"), imagenes);
+          item.onAnswer?.(answer, new Error("turno cortado"), imagenes, audios);
         } else {
           this.cerrarToolsPendientes("failed");
           this.emit("event", { type: "error", message: e.message });
-          item.onAnswer?.(answer, e, imagenes);
+          item.onAnswer?.(answer, e, imagenes, audios);
         }
       })
       .finally(() => {
@@ -1299,7 +1313,7 @@ export async function askFromChannel(
   via: Canal,
   from?: string,
   images: ImagePayload[] = [],
-): Promise<{ text: string; images: ImagePayload[] }> {
+): Promise<{ text: string; images: ImagePayload[]; audios: ImagePayload[] }> {
   let s = sesionActual();
   if (!s || !s.ready) s = await abrirHilo(s?.sessionId ?? HILO_NUEVO);
   markActivity();
@@ -1308,11 +1322,11 @@ export async function askFromChannel(
     s!.ask(text, images, {
       via,
       from,
-      onAnswer: (answer, error, imgs) => {
+      onAnswer: (answer, error, imgs, auds) => {
         markActivity();
         // Con texto ya escrito, un error de cierre no borra la respuesta.
-        if (error && !answer && !imgs.length) reject(error);
-        else resolve({ text: answer, images: imgs });
+        if (error && !answer && !imgs.length && !auds.length) reject(error);
+        else resolve({ text: answer, images: imgs, audios: auds });
       },
     });
   });

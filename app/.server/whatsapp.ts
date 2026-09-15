@@ -458,7 +458,7 @@ async function despachar(jid: string) {
     const r = await askFromChannel(text, "whatsapp", from, images);
     clearInterval(typing);
     void s.sendPresenceUpdate("paused", jid).catch(() => {});
-    await responder(s, jid, ultimo.key, r.text, r.images);
+    await responder(s, jid, ultimo.key, r.text, r.images, r.audios);
     await reaccionar(s, jid, ultimo.key, "✅");
   } catch (e) {
     clearInterval(typing);
@@ -511,11 +511,31 @@ export async function cambiarFotoDeGrupo(jid: string | null | undefined, image: 
 
 const UN_EMOJI = /^\p{Extended_Pictographic}️?$/u;
 
-async function responder(s: WASocket, jid: string, key: WAMessage["key"], text: string, images: ImagePayload[]) {
+async function responder(
+  s: WASocket,
+  jid: string,
+  key: WAMessage["key"],
+  text: string,
+  images: ImagePayload[],
+  audios: ImagePayload[] = [],
+) {
   const limpio = text.trim();
   // Un solo emoji va como reacción, no como mensaje.
-  if (!images.length && UN_EMOJI.test(limpio)) {
+  if (!images.length && !audios.length && UN_EMOJI.test(limpio)) {
     await reaccionar(s, jid, key, limpio);
+    return;
+  }
+  // Un audio de una tool (Kokoro) sale como nota de voz: ogg/opus con `ptt`.
+  for (const au of audios) {
+    await enviar(s, jid, {
+      audio: Buffer.from(au.data, "base64"),
+      mimetype: au.mimeType.startsWith("audio/ogg") ? "audio/ogg; codecs=opus" : au.mimeType,
+      ptt: true,
+    });
+  }
+  if (audios.length && !images.length) {
+    // El texto del agente suele repetir lo que dice la nota: sólo va si trae algo más.
+    if (limpio && limpio.length > 40) await enviar(s, jid, { text: limpio });
     return;
   }
   if (images.length) {

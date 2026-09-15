@@ -33,6 +33,7 @@ export interface Turn {
   thought?: string;
   tools?: ToolEntry[];
   images?: ImagePayload[];
+  audios?: ImagePayload[];
   usage?: { used: number; size: number; cost: number };
   /** Por dónde entró, si no fue por esta pantalla (WhatsApp). */
   via?: string;
@@ -122,6 +123,10 @@ export function useAcpStream(
       streaming.current = false;
       setBusy(true);
       setTurns((prev) => [...prev, { role: "user", text: u.text, images: u.images, via: u.via, from: u.from }]);
+    });
+    es.addEventListener("audio", (e) => {
+      const { audio } = JSON.parse((e as MessageEvent).data) as { audio: ImagePayload };
+      patchCurrent((t) => ({ ...t, audios: [...(t.audios ?? []), audio] }));
     });
     // Una imagen que devolvió una herramienta: cuelga del mensaje del agente.
     es.addEventListener("image", (e) => {
