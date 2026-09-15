@@ -16,6 +16,10 @@ const API = "https://www.easybits.cloud/api/v2";
 const KEY = process.env.EASYBITS_API_KEY;
 const ID = process.env.AGENT_BOX_ID;
 const PORT = Number(process.env.IMAGEN_PORT ?? 4123);
+// Opcional: con llave de OpenAI el MCP anuncia también generar_imagen_hd. Viaja como
+// Environment de la unidad (archivo 600), nunca al repo.
+const OPENAI_KEY = process.env.OPENAI_API_KEY ?? "";
+const OPENAI_MODEL = process.env.OPENAI_IMAGE_MODEL ?? "gpt-image-2";
 if (!KEY) throw new Error("falta EASYBITS_API_KEY");
 if (!ID) throw new Error("falta AGENT_BOX_ID");
 
@@ -49,13 +53,15 @@ const exec = async (command, timeoutSeconds = 120) => {
 
 const imagen = readFileSync(new URL("../mcp/imagen.ts", import.meta.url)).toString("base64");
 
-const claudeMd = `# Herramientas de esta caja
-
-- Para generar o dibujar una imagen usa SIEMPRE la tool \`generar_imagen\` del MCP \`imagen\`
-  (ya está conectada). No busques SDKs ni escribas código para generar imágenes: llama la
-  tool con un prompt en inglés y devuelve el resultado.
-- Contesta en español.
-`;
+// Reglas para el agente. Se AGREGAN al CLAUDE.md de la caja si faltan: otros instaladores
+// (voz, oído) dejan ahí las suyas y no hay que pisarlas.
+const reglas = [
+  "- Para generar o dibujar una imagen usa SIEMPRE la tool `generar_imagen` del MCP `imagen` (ya está conectada). No busques SDKs ni escribas código para generar imágenes: llama la tool con un prompt en inglés y devuelve el resultado.",
+  "- Usa `generar_imagen_hd` SÓLO si piden explícitamente una imagen HD / alta calidad / alta resolución; si no, `generar_imagen`.",
+  "- Contesta en español.",
+];
+// Va en base64: los backticks y comillas del texto no sobreviven a un `sh -c`.
+const reglasB64 = Buffer.from(reglas.join("\n") + "\n").toString("base64");
 
 const unit = `[Unit]
 Description=MCP de imagenes (Streamable HTTP)
@@ -63,6 +69,7 @@ After=network-online.target
 
 [Service]
 Type=simple
+EnvironmentFile=-/etc/imagen-mcp.env
 ExecStart=__NODE__ /data/workspace/imagen.ts --http ${PORT}
 Restart=always
 RestartSec=2
@@ -76,11 +83,13 @@ set -e
 mkdir -p /data/workspace /data/work
 echo '${imagen}' | base64 -d > /data/workspace/imagen.ts
 NODE=$(command -v node)
+${OPENAI_KEY ? `printf 'OPENAI_API_KEY=%s\nOPENAI_IMAGE_MODEL=%s\n' '${OPENAI_KEY}' '${OPENAI_MODEL}' > /etc/imagen-mcp.env && chmod 600 /etc/imagen-mcp.env` : "true"}
 cat > /etc/systemd/system/imagen.service <<'UNIT'
 ${unit}UNIT
 sed -i "s|__NODE__|$NODE|" /etc/systemd/system/imagen.service
-cat > /data/work/CLAUDE.md <<'MD'
-${claudeMd}MD
+touch /data/work/CLAUDE.md
+grep -q '^# Herramientas de esta caja' /data/work/CLAUDE.md || printf '# Herramientas de esta caja\\n\\n' >> /data/work/CLAUDE.md
+grep -q 'generar_imagen_hd' /data/work/CLAUDE.md || echo '${reglasB64}' | base64 -d >> /data/work/CLAUDE.md
 systemctl daemon-reload
 systemctl enable --now imagen.service
 systemctl restart imagen.service

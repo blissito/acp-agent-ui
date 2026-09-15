@@ -22,8 +22,11 @@ type RpcRequest = { jsonrpc: "2.0"; id?: number | string; method: string; params
 type RpcResponse = { jsonrpc: "2.0"; id: RpcRequest["id"]; result?: unknown; error?: unknown };
 
 const GENERADOR = process.env.IMAGEN_URL ?? "https://image.pollinations.ai/prompt/";
+// La HD va por OpenAI, y sólo si hay llave: sin OPENAI_API_KEY la tool no se anuncia.
+const OPENAI_KEY = process.env.OPENAI_API_KEY ?? "";
+const OPENAI_MODEL = process.env.OPENAI_IMAGE_MODEL ?? "gpt-image-2";
 
-const TOOLS = [
+const TOOLS: any[] = [
   {
     name: "generar_imagen",
     description:
@@ -39,6 +42,37 @@ const TOOLS = [
     },
   },
 ];
+
+if (OPENAI_KEY) {
+  TOOLS.push({
+    name: "generar_imagen_hd",
+    description:
+      "Genera una imagen en alta definición con el modelo de imágenes de OpenAI. Úsala SÓLO cuando te pidan explícitamente una imagen HD, en alta calidad o de alta resolución; para todo lo demás usa generar_imagen.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        prompt: { type: "string", description: "Qué debe mostrar la imagen, en inglés si es posible" },
+        size: { type: "string", enum: ["1024x1024", "1536x1024", "1024x1536"], description: "Tamaño (default 1024x1024)" },
+      },
+      required: ["prompt"],
+    },
+  });
+}
+
+/** "HD" para el agente, pero se pide en calidad `low`: cuesta centavos y tarda segundos. */
+async function generarHd(prompt: string, size = "1024x1024") {
+  const r = await fetch("https://api.openai.com/v1/images/generations", {
+    method: "POST",
+    headers: { authorization: `Bearer ${OPENAI_KEY}`, "content-type": "application/json" },
+    body: JSON.stringify({ model: OPENAI_MODEL, prompt, size, quality: "low", n: 1 }),
+    signal: AbortSignal.timeout(120_000),
+  });
+  const j: any = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(`OpenAI ${r.status}: ${j?.error?.message ?? "sin detalle"}`);
+  const data = j?.data?.[0]?.b64_json;
+  if (!data) throw new Error("OpenAI no devolvió imagen");
+  return { mimeType: "image/png", data };
+}
 
 async function generar(prompt: string, width = 768, height = 768) {
   const url = `${GENERADOR}${encodeURIComponent(prompt)}?width=${width}&height=${height}&nologo=true`;
@@ -66,6 +100,19 @@ async function atender(req: RpcRequest): Promise<RpcResponse | null> {
       return ok({ tools: TOOLS });
     case "tools/call": {
       const args = req.params?.arguments ?? {};
+      if (req.params?.name === "generar_imagen_hd" && OPENAI_KEY) {
+        try {
+          const im = await generarHd(String(args.prompt ?? ""), args.size ? String(args.size) : undefined);
+          return ok({
+            content: [
+              { type: "image", data: im.data, mimeType: im.mimeType },
+              { type: "text", text: `Imagen HD generada para: ${args.prompt}` },
+            ],
+          });
+        } catch (e) {
+          return ok({ isError: true, content: [{ type: "text", text: `No pude generar la imagen HD: ${(e as Error).message}` }] });
+        }
+      }
       if (req.params?.name !== "generar_imagen") {
         return { jsonrpc: "2.0", id: req.id, error: { code: -32602, message: `no conozco la tool ${req.params?.name}` } };
       }
