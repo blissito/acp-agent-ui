@@ -17,6 +17,7 @@ export default [
   route("api/extensions", "routes/api.extensions.ts"),
   route("api/whatsapp", "routes/api.whatsapp.ts"),
   route("api/whatsapp/events", "routes/api.whatsapp.events.ts"),
+  route("api/mcp/whatsapp", "routes/api.mcp.whatsapp.ts"),
 
   layout("routes/_shell.tsx", [
     index("routes/hub.tsx"),

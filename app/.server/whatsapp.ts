@@ -65,6 +65,8 @@ const vivo: {
   nuestros: Set<string>;
   rehidratado: boolean;
   gruposAt: number;
+  /** El grupo cuyo turno está en vuelo: las tools de grupo actúan ahí por defecto. */
+  grupoEnTurno: string | null;
 } = (g.__wa ??= {
   estado: { phase: "disconnected", qr: null, pairingCode: null, me: null, error: null },
   emisor: new EventEmitter(),
@@ -74,6 +76,7 @@ const vivo: {
   nuestros: new Set(),
   rehidratado: false,
   gruposAt: 0,
+  grupoEnTurno: null,
 });
 const estado = vivo.estado;
 const emisor = vivo.emisor;
@@ -450,6 +453,7 @@ async function despachar(jid: string) {
   const typing = setInterval(() => void s.sendPresenceUpdate("composing", jid).catch(() => {}), 8_000);
   void s.sendPresenceUpdate("composing", jid).catch(() => {});
 
+  vivo.grupoEnTurno = jid;
   try {
     const r = await askFromChannel(text, "whatsapp", from, images);
     clearInterval(typing);
@@ -460,7 +464,49 @@ async function despachar(jid: string) {
     clearInterval(typing);
     console.warn("[wa] turno falló:", (e as Error).message);
     await enviar(s, jid, { text: `⚠️ No pude contestar: ${(e as Error).message}` });
+  } finally {
+    if (vivo.grupoEnTurno === jid) vivo.grupoEnTurno = null;
   }
+}
+
+// ---------------------------------------------------------------------------
+// Superficie del grupo para el agente (la usa el MCP de /api/mcp/whatsapp)
+// ---------------------------------------------------------------------------
+function socketConectado(): WASocket {
+  if (!vivo.sock || estado.phase !== "connected") throw new Error("WhatsApp no está conectado");
+  return vivo.sock;
+}
+
+/** El grupo sobre el que actuar: el pedido, o el del turno en vuelo, o el único prendido. */
+export function resolverGrupo(jid?: string | null): string {
+  if (jid) {
+    const j = jid.includes("@") ? jid : `${jid}@g.us`;
+    if (!j.endsWith("@g.us")) throw new Error(`${jid} no es un grupo`);
+    return j;
+  }
+  if (vivo.grupoEnTurno) return vivo.grupoEnTurno;
+  const prendidos = listGroups().filter((g) => g.enabled);
+  if (prendidos.length === 1) return prendidos[0].jid;
+  throw new Error("Di en qué grupo (jid): hay varios prendidos y este turno no vino de ninguno.");
+}
+
+/** El link de invitación del grupo (`https://chat.whatsapp.com/<código>`). */
+export async function linkDeGrupo(jid?: string | null): Promise<{ jid: string; subject: string; link: string }> {
+  const s = socketConectado();
+  const j = resolverGrupo(jid);
+  const code = await s.groupInviteCode(j);
+  if (!code) throw new Error("WhatsApp no devolvió código de invitación (¿la app es admin del grupo?)");
+  const subject = listGroups().find((g) => g.jid === j)?.subject ?? "";
+  return { jid: j, subject, link: `https://chat.whatsapp.com/${code}` };
+}
+
+/** Cambia la foto del grupo. Baileys la sube como attachment de perfil (WAMediaUpload). */
+export async function cambiarFotoDeGrupo(jid: string | null | undefined, image: Buffer): Promise<{ jid: string; subject: string }> {
+  const s = socketConectado();
+  const j = resolverGrupo(jid);
+  await s.updateProfilePicture(j, image);
+  const subject = listGroups().find((g) => g.jid === j)?.subject ?? "";
+  return { jid: j, subject };
 }
 
 const UN_EMOJI = /^\p{Extended_Pictographic}️?$/u;
